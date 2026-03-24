@@ -1051,6 +1051,8 @@ function renderDashboard() {
   const avgConceded = teamGames.length ? (concededGoals.length / teamGames.length).toFixed(2) : 0;
   const winPct = teamGames.length ? Math.round(wins / teamGames.length * 100) : 0;
 
+  const allTime = selectedSeason === 'all';
+
   const content = document.getElementById('mainContent');
   content.innerHTML = `
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:28px;font-weight:900;letter-spacing:1px;color:var(--text);margin-bottom:4px;">
@@ -1093,7 +1095,7 @@ function renderDashboard() {
       </div>
     </div>
 
-    <!-- ── SECTION: Special Teams ── -->
+    <!-- ── SECTION: Special Teams (always) ── -->
     <div class="sec-hdr" id="sh-pen" onclick="toggleSec('pen')">
       <span>Special Teams — Strafen · Powerplay · Boxplay</span><span class="sec-arrow">▾</span>
     </div>
@@ -1103,7 +1105,92 @@ function renderDashboard() {
       </div>
     </div>
 
-    <!-- ── SECTION: Toranalyse ── -->
+    <!-- ── SECTION: Scorer & Gegner (always) ── -->
+    <div class="sec-hdr" id="sh-scorer" onclick="toggleSec('scorer')">
+      <span>Scorer & Gegner</span><span class="sec-arrow">▾</span>
+    </div>
+    <div class="sec-body" id="sb-scorer">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Top Torschützen</div>
+          <div style="display:flex;gap:6px;padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:8px;align-items:center">
+            <span style="font-size:10px;color:var(--muted);flex:1;padding-left:32px">Spieler</span>
+            <span style="font-size:10px;color:var(--muted);width:80px;text-align:right">Tore</span>
+            <span style="font-size:10px;color:var(--muted);width:28px;text-align:right">Ast.</span>
+            <span style="font-size:9px;color:var(--accent);margin-left:6px;opacity:0.7">↗ Profil</span>
+          </div>
+          <div id="topScorers"></div>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent)"></span>Leistungsvergleich Gegner</div>
+          <canvas id="chartOpponent"></canvas>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top:24px">
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>Heim vs. Auswärts</div>
+          <div id="homeAway"></div>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:#9C27B0"></span>Assist-Matrix — Wer passt auf wen?</div>
+          <div id="assistMatrix"></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:24px">
+        <div class="card-title"><span class="dot"></span>Saisonvergleich — Tore pro Spieltag</div>
+        <canvas id="chartSeasonCompare"></canvas>
+      </div>
+    </div>
+
+    <!-- ── SECTION: Statistiken (always, filtered per allTime) ── -->
+    <div class="sec-hdr" id="sh-stats" onclick="toggleSec('stats')">
+      <span>Statistiken</span><span class="sec-arrow">▾</span>
+    </div>
+    <div class="sec-body" id="sb-stats">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--score)"></span>Erstes Tor — Vorteil?</div>
+          <div id="firstGoalStats"></div>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>Comeback-Statistik</div>
+          <div id="comebackStats"></div>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top:24px">
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--muted)"></span>Knappe Spiele (1-Tor-Differenz)</div>
+          <div id="closeGames"></div>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Hat-Tricks &amp; Mehrfachtreffer</div>
+          <div id="hatTrickStats"></div>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top:24px">
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent)"></span>Tore-Verteilung pro Spiel</div>
+          <canvas id="chartGoalDist"></canvas>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--score)"></span>Opener vs. Closer — Wer trifft wann?</div>
+          <div id="openerCloser"></div>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top:24px">
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent)"></span>Performance nach Spielort</div>
+          <canvas id="chartLocation"></canvas>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--muted)"></span>Ø Zeit bis zum ersten Tor</div>
+          <div id="firstGoalTime"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SECTION: Spielanalyse (SEASON ONLY) ── -->
+    ${!allTime ? `
     <div class="sec-hdr" id="sh-tor" onclick="toggleSec('tor')">
       <span>Toranalyse</span><span class="sec-arrow">▾</span>
     </div>
@@ -1134,11 +1221,10 @@ function renderDashboard() {
       </div>
     </div>
 
-    <!-- ── SECTION: Spielübersicht ── -->
-    <div class="sec-hdr" id="sh-übersicht" onclick="toggleSec('übersicht')">
-      <span>Spielübersicht</span><span class="sec-arrow">▾</span>
+    <div class="sec-hdr" id="sh-verlauf" onclick="toggleSec('verlauf')">
+      <span>Spielverlauf & Trends</span><span class="sec-arrow">▾</span>
     </div>
-    <div class="sec-body" id="sb-übersicht">
+    <div class="sec-body" id="sb-verlauf">
       <div class="grid-2">
         <div class="card">
           <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Leistung nach Wochentag</div>
@@ -1155,68 +1241,12 @@ function renderDashboard() {
       </div>
       <div class="grid-2" style="margin-top:24px">
         <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>Heim vs. Auswärts</div>
-          <div id="homeAway"></div>
-        </div>
-        ${selectedSeason === 'all'
-          ? `<div class="card"><div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Score-Trend</div><div class="season-req">📅 Wähle eine Saison für den Score-Trend</div></div>`
-          : `<div class="card"><div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Score-Trend</div><canvas id="chartScoreTrend"></canvas></div>`}
-      </div>
-    </div>
-
-    <!-- ── SECTION: Scorer & Gegner ── -->
-    <div class="sec-hdr" id="sh-scorer" onclick="toggleSec('scorer')">
-      <span>Scorer & Gegner</span><span class="sec-arrow">▾</span>
-    </div>
-    <div class="sec-body" id="sb-scorer">
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Top Torschützen</div>
-          <div style="display:flex;gap:6px;padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:8px;align-items:center">
-            <span style="font-size:10px;color:var(--muted);flex:1;padding-left:32px">Spieler</span>
-            <span style="font-size:10px;color:var(--muted);width:80px;text-align:right">Tore</span>
-            <span style="font-size:10px;color:var(--muted);width:28px;text-align:right">Ast.</span>
-            <span style="font-size:9px;color:var(--accent);margin-left:6px;opacity:0.7">↗ Profil</span>
-          </div>
-          <div id="topScorers"></div>
+          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Score-Trend</div>
+          <canvas id="chartScoreTrend"></canvas>
         </div>
         <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent)"></span>Leistungsvergleich Gegner</div>
-          <canvas id="chartOpponent"></canvas>
-        </div>
-      </div>
-      <div class="card" style="margin-top:24px">
-        <div class="card-title"><span class="dot"></span>Saisonvergleich — Tore pro Spieltag</div>
-        <canvas id="chartSeasonCompare"></canvas>
-      </div>
-      <div class="card" style="margin-top:24px">
-        <div class="card-title"><span class="dot" style="background:#9C27B0"></span>Assist-Matrix — Wer passt auf wen?</div>
-        <div id="assistMatrix"></div>
-      </div>
-    </div>
-
-    <!-- ── SECTION: Advanced Statistics (closed by default) ── -->
-    <div class="sec-hdr" id="sh-adv" onclick="toggleSec('adv')">
-      <span>Advanced Statistics</span><span class="sec-arrow">▾</span>
-    </div>
-    <div class="sec-body" id="sb-adv">
-      <div class="grid-2">
-        ${selectedSeason === 'all'
-          ? `<div class="card"><div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Ergebnisserie</div><div class="season-req">📅 Wähle eine Saison</div></div>`
-          : `<div class="card"><div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Ergebnisserie (letzte Spiele)</div><div id="streakViz"></div></div>`}
-        <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--score)"></span>Erstes Tor — Vorteil?</div>
-          <div id="firstGoalStats"></div>
-        </div>
-      </div>
-      <div class="grid-2" style="margin-top:24px">
-        <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>Comeback-Statistik</div>
-          <div id="comebackStats"></div>
-        </div>
-        <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--muted)"></span>Knappe Spiele (1-Tor-Differenz)</div>
-          <div id="closeGames"></div>
+          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Ergebnisserie (letzte Spiele)</div>
+          <div id="streakViz"></div>
         </div>
       </div>
       <div class="grid-2" style="margin-top:24px">
@@ -1231,37 +1261,8 @@ function renderDashboard() {
       </div>
       <div class="grid-2" style="margin-top:24px">
         <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Hat-Tricks &amp; Mehrfachtreffer</div>
-          <div id="hatTrickStats"></div>
-        </div>
-        <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent)"></span>Tore-Verteilung pro Spiel</div>
-          <canvas id="chartGoalDist"></canvas>
-        </div>
-      </div>
-      <div class="grid-2" style="margin-top:24px">
-        <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--score)"></span>Opener vs. Closer — Wer trifft wann?</div>
-          <div id="openerCloser"></div>
-        </div>
-        ${selectedSeason === 'all'
-          ? `<div class="card"><div class="card-title"><span class="dot" style="background:var(--accent)"></span>Spielerform — Tore pro Monat</div><div class="season-req">📅 Wähle eine Saison für die Monatsform</div></div>`
-          : `<div class="card"><div class="card-title"><span class="dot" style="background:var(--accent)"></span>Spielerform — Tore pro Monat</div><canvas id="chartPlayerForm"></canvas></div>`}
-      </div>
-      <div class="grid-2" style="margin-top:24px">
-        <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Clutch-Tore (Stand ±1)</div>
-          <div id="clutchStats"></div>
-        </div>
-        <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent)"></span>Performance nach Spielort</div>
-          <canvas id="chartLocation"></canvas>
-        </div>
-      </div>
-      <div class="grid-2" style="margin-top:24px">
-        <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--muted)"></span>Ø Zeit bis zum ersten Tor (Minuten)</div>
-          <div id="firstGoalTime"></div>
+          <div class="card-title"><span class="dot" style="background:var(--accent)"></span>Spielerform — Tore pro Monat</div>
+          <canvas id="chartPlayerForm"></canvas>
         </div>
         <div class="card">
           <div class="card-title"><span class="dot" style="background:#9C27B0"></span>Back-to-Back Spiele — Leistungsvergleich</div>
@@ -1269,40 +1270,47 @@ function renderDashboard() {
         </div>
       </div>
     </div>
+    ` : ''}
 
   `;
 
-  // Now populate each section
-  renderMinuteLineChart(scoredGoals, concededGoals, teamGames.length);
-  renderPeriodChart(scoredGoals, concededGoals);
-  renderBestWorstMinutes(scoredGoals, concededGoals, teamGames.length);
-  renderWeekdayChart(teamGames, scoredGoals, concededGoals);
-  renderTimeSlotChart(teamGames, scoredGoals, concededGoals);
-  renderDayTimeHeatmap(scoredGoals, concededGoals, teamGames);
-  renderMinuteHeatmap(scoredGoals, concededGoals);
-  renderHomeAway(teamGames, scoredGoals, concededGoals);
-  renderScoreTrend(teamGames);
+  // Always-visible sections
   renderTopScorers(scoredGoals, concededGoals);
   renderOpponentChart(scoredGoals, concededGoals);
-  renderSeasonCompare(teamGames);
+  renderHomeAway(teamGames, scoredGoals, concededGoals);
   renderAssistMatrix(scoredGoals);
-  renderStreaks(teamGames);
+  renderSeasonCompare(teamGames);
   renderFirstGoalAdvantage(teamGames, scoredGoals);
   renderComebacks(teamGames, scoredGoals, concededGoals);
   renderCloseGames(teamGames, scoredGoals, concededGoals);
-  renderLastMinutes(scoredGoals, concededGoals, teamGames.length);
-  renderBursts(scoredGoals, teamGames.length);
   renderHatTricks(scoredGoals);
   renderGoalDistribution(teamGames);
   renderOpenerCloser(scoredGoals);
-  renderPlayerForm(scoredGoals);
-  renderClutchScorers(scoredGoals);
   renderLocationStats(teamGames, scoredGoals, concededGoals);
   renderFirstGoalTime(teamGames, scoredGoals);
-  renderBackToBack(teamGames, scoredGoals, concededGoals);
   renderPenalties(scoredGoals, concededGoals, teamGames);
+
+  // Season-only sections
+  if (!allTime) {
+    renderMinuteLineChart(scoredGoals, concededGoals, teamGames.length);
+    renderPeriodChart(scoredGoals, concededGoals);
+    renderBestWorstMinutes(scoredGoals, concededGoals, teamGames.length);
+    renderMinuteHeatmap(scoredGoals, concededGoals);
+    renderWeekdayChart(teamGames, scoredGoals, concededGoals);
+    renderTimeSlotChart(teamGames, scoredGoals, concededGoals);
+    renderDayTimeHeatmap(scoredGoals, concededGoals, teamGames);
+    renderScoreTrend(teamGames);
+    renderStreaks(teamGames);
+    renderLastMinutes(scoredGoals, concededGoals, teamGames.length);
+    renderBursts(scoredGoals, teamGames.length);
+    renderPlayerForm(scoredGoals);
+    renderBackToBack(teamGames, scoredGoals, concededGoals);
+  }
+
   // Apply collapsible states AFTER all charts are rendered
-  initSecs({ pen: true, tor: true, 'übersicht': true, scorer: true, adv: false });
+  const secDefaults = { pen: true, scorer: true, stats: true };
+  if (!allTime) { secDefaults.tor = true; secDefaults.verlauf = false; }
+  initSecs(secDefaults);
 }
 
 // ─────────────────────────────────────────────
@@ -4654,7 +4662,8 @@ function renderLeaguePage() {
       </div>
     </div>
 
-    <!-- ── SECTION: Form & Special Teams ── -->
+    <!-- ── SECTION: Form & Special Teams (season only) ── -->
+    ${leagueSelectedSeason !== 'all' ? `
     <div class="sec-hdr" id="sh-lform" onclick="toggleSec('lform')">
       <span>Form & Special Teams</span><span class="sec-arrow">▾</span>
     </div>
@@ -4710,6 +4719,7 @@ function renderLeaguePage() {
       </div>
     </div>
     </div><!-- /sb-lform -->
+    ` : ''}
 
     <!-- ── SECTION: Scoring Patterns ── -->
     <div class="sec-hdr" id="sh-lpatterns" onclick="toggleSec('lpatterns')">
@@ -4870,8 +4880,10 @@ function renderLeaguePage() {
     </div><!-- /sb-lpen -->
   `;
 
-  // Apply collapsible states for league page (default: all open except big lists)
-  initSecs({ lform: true, lpatterns: true, lclutch: true, lscorers: false, lpen: false });
+  // Apply collapsible states for league page
+  const lgSecs = { lpatterns: true, lscorers: false, lpen: false };
+  if (leagueSelectedSeason !== 'all') lgSecs.lform = true;
+  initSecs(lgSecs);
 }
 
 // ── Boot: fetch data.json ─────────────────────────────────────────────────
