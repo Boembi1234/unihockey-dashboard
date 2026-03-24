@@ -37,7 +37,8 @@ TARGET_LEAGUES = [
     {"league":  1, "game_class": 11, "label": "Herren NLA",
      "seasons": [2021,2020,2019,2018,2017,2016,2015,2014,2013,
                  2006,2005,2004,2003,2002,2001,2000,1999,1998,1997]},
-     # Note: 2007–2012 return 400 from the API (data gap)
+    {"league": 10, "game_class": 11, "label": "Herren SML",
+     "seasons": [2012,2011,2010,2009,2008,2007]},
     # {"league":  3, "game_class": 11, "label": "Herren 1. Liga"},
     # {"league": 24, "game_class": 21, "label": "Damen L-UPL"},
     # {"league":  2, "game_class": 11, "label": "Herren NLB"},
