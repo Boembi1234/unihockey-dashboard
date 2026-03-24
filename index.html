@@ -757,10 +757,8 @@
              oninput="onPlayerSearch()" onblur="setTimeout(()=>document.getElementById('playerAutocomplete').classList.remove('open'),200)">
       <div id="playerAutocomplete" class="player-autocomplete"></div>
     </div>
-    <div class="filter-pills" id="playerSeasonPills">
-      <span class="selector-label" style="margin-left:8px">Saison</span>
-      <button class="pill active" data-season="all" onclick="setPlayerSeason(this,'all')">Alle</button>
-    </div>
+    <span class="selector-label">Saison</span>
+    <select id="playerSeasonSelect" onchange="setPlayerSeason(this.value)" style="min-width:150px"></select>
   </div>
   <div class="main" id="playerContent">
     <div class="no-data">Spieler suchen und auswählen…</div>
@@ -776,9 +774,7 @@
   </div>
   <div class="selector-bar">
     <span class="selector-label">Saison</span>
-    <div class="filter-pills" id="leagueSeasonPills">
-      <button class="pill active" data-season="all" onclick="setLeagueSeason(this,'all')">Alle</button>
-    </div>
+    <select id="leagueSeasonSelect" onchange="setLeagueSeason(this.value)" style="min-width:150px"></select>
   </div>
   <div class="main" id="leagueContent">
     <div class="no-data">Wird geladen…</div>
@@ -790,15 +786,8 @@
   <select id="clubSelect" onchange="onClubChange()"><option value="">— Verein —</option></select>
   <span class="selector-label">Liga</span>
   <select id="leagueSelect" onchange="updateDashboard()" disabled><option value="">— Liga —</option></select>
-  <div class="filter-pills" id="seasonPills">
-    <span class="selector-label" style="margin-left:8px">Saison</span>
-    <button class="pill active" data-season="all" onclick="setSeason(this,'all')">Alle</button>
-  </div>
-  <div class="filter-pills" style="margin-left:auto">
-    <span class="selector-label">Ansicht</span>
-    <button class="pill active" data-view="scored"   onclick="setView(this,'scored')">Geschossen</button>
-    <button class="pill"        data-view="conceded" onclick="setView(this,'conceded')">Kassiert</button>
-  </div>
+  <span class="selector-label">Saison</span>
+  <select id="seasonSelect" onchange="setSeason(this.value)" style="min-width:150px"></select>
 </div>
 
 <div class="main" id="mainContent">
@@ -819,30 +808,49 @@ let selectedClubName  = '';
 let selectedLeague = null;
 let selectedSeason = 'all';
 let selectedView   = 'scored';
+let topScorerView  = 'pts'; // 'pts' = Punkte (G+A), 'goals' = Tore only
 let charts = {};
+
+// Club name aliases — treated as same club
+const CLUB_ALIASES = {
+  'Waldkirch-St. Gallen': 'St. Gallen',
+  'SV Waldkirch-St.Gallen': 'St. Gallen'
+};
+
+function applyClubAliases() {
+  if (!DB.clubs) return;
+  DB.clubs.forEach(c => {
+    const canon = CLUB_ALIASES[c.name];
+    if (canon) c.name = canon;
+  });
+  // Merge duplicate clubs (may now have same name after aliasing)
+  const merged = {};
+  DB.clubs.forEach(c => {
+    if (!merged[c.name]) { merged[c.name] = c; }
+    else { merged[c.name].teams = merged[c.name].teams.concat(c.teams); }
+  });
+  DB.clubs = Object.values(merged);
+}
 
 // Globals for modal & advanced stats
 let scoredGoalsGlobal = [], concededGoalsGlobal = [], teamGamesGlobal = [];
 
 // ── Filter cascade ────────────────────────────────────────────────────────
 function buildSeasonPills() {
-  const container = document.getElementById('seasonPills');
-  if (!container) return;
-
-  // Remove any previously generated pills (keep "Alle" button)
-  container.querySelectorAll('[data-season]:not([data-season="all"])').forEach(b => b.remove());
-
+  const sel = document.getElementById('seasonSelect');
+  if (!sel) return;
+  sel.innerHTML = '';
+  const allOpt = document.createElement('option');
+  allOpt.value = 'all'; allOpt.textContent = 'Alle Saisons';
+  sel.appendChild(allOpt);
   const seasons = DB.seasons || [...new Set(DB.games.map(g => g.season).filter(Boolean))].sort();
-
   seasons.forEach(s => {
-    const btn = document.createElement('button');
-    btn.className = 'pill';
-    btn.dataset.season = s;
-    // Format as season range e.g. 2025 → "2025/26"
-    btn.textContent = `${s}/${String(s+1).slice(-2)}`;
-    btn.onclick = () => setSeason(btn, String(s));
-    container.appendChild(btn);
+    const o = document.createElement('option');
+    o.value = s;
+    o.textContent = `${s}/${String(s+1).slice(-2)}`;
+    sel.appendChild(o);
   });
+  sel.value = selectedSeason;
 }
 
 function init() {
@@ -921,9 +929,8 @@ function onClubChange() {
   updateDashboard();
 }
 
-function setSeason(el, val) {
-  document.querySelectorAll('[data-season]').forEach(b => b.classList.remove('active'));
-  el.classList.add('active'); selectedSeason = val;
+function setSeason(val) {
+  selectedSeason = val;
   if (selectedTeamIds && selectedTeamIds.size) updateDashboard();
 }
 
@@ -1112,10 +1119,14 @@ function renderDashboard() {
     <div class="sec-body" id="sb-scorer">
       <div class="grid-2">
         <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Top Torschützen</div>
+          <div class="card-title" style="display:flex;align-items:center;gap:8px">
+            <span><span class="dot" style="background:var(--accent3)"></span>Top Torschützen</span>
+            <button id="scorerToggleBtn" onclick="toggleScorerView()" style="margin-left:auto;font-size:10px;padding:3px 9px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);color:var(--muted);cursor:pointer;font-family:inherit">Punkte</button>
+          </div>
           <div style="display:flex;gap:6px;padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:8px;align-items:center">
             <span style="font-size:10px;color:var(--muted);flex:1;padding-left:32px">Spieler</span>
-            <span style="font-size:10px;color:var(--muted);width:80px;text-align:right">Tore</span>
+            <span id="scorerSortLabel" style="font-size:10px;color:var(--muted);width:80px;text-align:right">Punkte</span>
+            <span id="scorerGoalLabel" style="font-size:10px;color:var(--muted);width:28px;text-align:right">Tore</span>
             <span style="font-size:10px;color:var(--muted);width:28px;text-align:right">Ast.</span>
             <span style="font-size:9px;color:var(--accent);margin-left:6px;opacity:0.7">↗ Profil</span>
           </div>
@@ -1836,6 +1847,11 @@ function renderScoreTrend(games) {
 // ─────────────────────────────────────────────
 // Top scorers
 // ─────────────────────────────────────────────
+function toggleScorerView() {
+  topScorerView = topScorerView === 'pts' ? 'goals' : 'pts';
+  renderTopScorers(scoredGoalsGlobal, concededGoalsGlobal);
+}
+
 function renderTopScorers(scored, conceded) {
   const goalMap = {}, assistMap = {};
   scored.forEach(g => {
@@ -1843,24 +1859,36 @@ function renderTopScorers(scored, conceded) {
     if (g.assist_raw) assistMap[g.assist_raw] = (assistMap[g.assist_raw]||0)+1;
   });
 
+  const byPts = topScorerView === 'pts';
   const players = Object.entries(goalMap)
-    .map(([name, goals]) => ({ name, goals, assists: assistMap[name]||0 }))
-    .sort((a,b) => b.goals - a.goals)
+    .map(([name, goals]) => ({ name, goals, assists: assistMap[name]||0, pts: goals + (assistMap[name]||0) }))
+    .sort((a,b) => byPts ? b.pts - a.pts : b.goals - a.goals)
     .slice(0, 15);
 
-  const maxGoals = players[0]?.goals || 1;
+  const maxVal = byPts ? (players[0]?.pts || 1) : (players[0]?.goals || 1);
+
+  // sync labels
+  const btn = document.getElementById('scorerToggleBtn');
+  if (btn) btn.textContent = byPts ? '↔ Tore' : '↔ Punkte';
+  const sortLbl = document.getElementById('scorerSortLabel');
+  if (sortLbl) sortLbl.textContent = byPts ? 'Punkte' : 'Tore';
+  const goalLbl = document.getElementById('scorerGoalLabel');
+  if (goalLbl) goalLbl.style.display = byPts ? '' : 'none';
 
   const rows = players.map((p, i) => {
     const safeN = p.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
     const escapedN = p.name.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    const barVal = byPts ? p.pts : p.goals;
+    const goalCell = byPts ? `<span class="scorer-assists">${p.goals}</span>` : '';
     return `
     <div class="scorer-row" onclick="openPlayerModal('${safeN}', scoredGoalsGlobal, concededGoalsGlobal, teamGamesGlobal)" title="Klicken für Spielerprofil">
       <span class="scorer-rank">${i+1}</span>
       <span class="scorer-name">${escapedN}</span>
       <div class="scorer-bar-wrap">
-        <div class="scorer-bar" style="width:${(p.goals/maxGoals*100).toFixed(1)}%"></div>
+        <div class="scorer-bar" style="width:${(barVal/maxVal*100).toFixed(1)}%"></div>
       </div>
-      <span class="scorer-goals">${p.goals}</span>
+      <span class="scorer-goals">${byPts ? p.pts : p.goals}</span>
+      ${goalCell}
       <span class="scorer-assists">${p.assists}</span>
       <span style="font-size:11px;color:var(--muted);margin-left:2px;opacity:0.6">›</span>
     </div>`;
@@ -3802,23 +3830,23 @@ function buildAllPlayers() {
 }
 
 function buildPlayerSeasonPills() {
-  const container = document.getElementById('playerSeasonPills');
-  if (!container) return;
-  container.querySelectorAll('[data-season]:not([data-season="all"])').forEach(b => b.remove());
+  const sel = document.getElementById('playerSeasonSelect');
+  if (!sel) return;
+  sel.innerHTML = '';
+  const allOpt = document.createElement('option');
+  allOpt.value = 'all'; allOpt.textContent = 'Alle Saisons';
+  sel.appendChild(allOpt);
   const seasons = DB.seasons || [...new Set((DB.goals||[]).map(g => g.season).filter(Boolean))].sort();
   seasons.forEach(s => {
-    const btn = document.createElement('button');
-    btn.className = 'pill';
-    btn.dataset.season = s;
-    btn.textContent = `${s}/${String(s+1).slice(-2)}`;
-    btn.onclick = () => setPlayerSeason(btn, String(s));
-    container.appendChild(btn);
+    const o = document.createElement('option');
+    o.value = s;
+    o.textContent = `${s}/${String(s+1).slice(-2)}`;
+    sel.appendChild(o);
   });
+  sel.value = playerSelectedSeason;
 }
 
-function setPlayerSeason(el, val) {
-  document.querySelectorAll('#playerSeasonPills .pill').forEach(b => b.classList.remove('active'));
-  el.classList.add('active');
+function setPlayerSeason(val) {
   playerSelectedSeason = val;
   if (selectedPlayer) renderPlayerPage(selectedPlayer);
 }
@@ -4224,16 +4252,19 @@ let leagueSelectedSeason = 'all';
 let leagueSelectedLeague = 'all';
 
 function buildLeagueSeasonPills() {
-  const c = document.getElementById('leagueSeasonPills');
-  if (!c) return;
-  c.querySelectorAll('[data-season]:not([data-season="all"])').forEach(b => b.remove());
+  const sel = document.getElementById('leagueSeasonSelect');
+  if (!sel) return;
+  sel.innerHTML = '';
+  const allOpt = document.createElement('option');
+  allOpt.value = 'all'; allOpt.textContent = 'Alle Saisons';
+  sel.appendChild(allOpt);
   (DB.seasons || []).forEach(s => {
-    const btn = document.createElement('button');
-    btn.className = 'pill'; btn.dataset.season = s;
-    btn.textContent = `${s}/${String(s+1).slice(-2)}`;
-    btn.onclick = () => setLeagueSeason(btn, String(s));
-    c.appendChild(btn);
+    const o = document.createElement('option');
+    o.value = s;
+    o.textContent = `${s}/${String(s+1).slice(-2)}`;
+    sel.appendChild(o);
   });
+  sel.value = leagueSelectedSeason;
 }
 
 function buildLeagueLeaguePills() {
@@ -4250,9 +4281,7 @@ function buildLeagueLeaguePills() {
   });
 }
 
-function setLeagueSeason(el, val) {
-  document.querySelectorAll('#leagueSeasonPills .pill').forEach(b => b.classList.remove('active'));
-  el.classList.add('active');
+function setLeagueSeason(val) {
   leagueSelectedSeason = val;
   renderLeaguePage();
 }
@@ -4891,6 +4920,7 @@ fetch('data.json')
   .then(r => { if (!r.ok) throw new Error('data.json nicht gefunden'); return r.json(); })
   .then(data => {
     DB = data;
+    applyClubAliases();
     const ng = DB.games?.length || 0, nl = DB.goals?.length || 0;
     document.getElementById('subtitle').textContent = `${ng} Spiele · ${nl} Tore`;
     init();
