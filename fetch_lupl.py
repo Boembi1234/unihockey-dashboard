@@ -33,13 +33,14 @@ SLEEP     = 0.4
 # Which leagues to fetch — add/remove entries as needed
 # Full league list at the bottom of this file
 TARGET_LEAGUES = [
-    {"league": 24, "game_class": 11, "label": "Herren L-UPL"},
+    {"league": 24, "game_class": 11, "label": "Herren L-UPL", "seasons": [2025, 2024, 2023, 2022]},
+    {"league":  1, "game_class": 11, "label": "Herren NLA",   "seasons": [2021, 2020, 2019, 2018]},
     # {"league":  3, "game_class": 11, "label": "Herren 1. Liga"},
     # {"league": 24, "game_class": 21, "label": "Damen L-UPL"},
     # {"league":  2, "game_class": 11, "label": "Herren NLB"},
 ]
 
-SEASONS = [2025, 2024, 2023, 2022]  # 2021 and earlier return 400 from the API
+SEASONS = []  # per-league seasons defined above
 
 # ══════════════════════════════════════════════════════════════════════
 # LEAGUE NORMALIZATION
@@ -551,7 +552,7 @@ def run():
         game_class = lg_cfg["game_class"]
         label      = lg_cfg["label"]
 
-        for season in SEASONS:
+        for season in lg_cfg.get("seasons", SEASONS):
             log.info(f"\n{label}  season {season}/{season+1}…")
             game_rows = fetch_game_rows(league, game_class, season)
             log.info(f"  Found {len(game_rows)} games")
