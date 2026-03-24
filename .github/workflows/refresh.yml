@@ -1,0 +1,33 @@
+name: Refresh data
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # every Monday at 06:00 UTC
+  workflow_dispatch:         # also allows manual trigger from GitHub UI
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Fetch latest data
+        run: python fetch_lupl.py
+
+      - name: Commit updated data
+        run: |
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+          git add data.json swiss_floorball_lupl.db
+          git diff --cached --quiet || git commit -m "Weekly data refresh $(date +'%Y-%m-%d')"
+          git push
