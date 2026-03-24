@@ -34,12 +34,12 @@ SLEEP     = 0.4
 # Full league list at the bottom of this file
 TARGET_LEAGUES = [
     {"league": 24, "game_class": 11, "label": "Herren L-UPL"},
-    {"league":  3, "game_class": 11, "label": "Herren 1. Liga"},
+    # {"league":  3, "game_class": 11, "label": "Herren 1. Liga"},
     # {"league": 24, "game_class": 21, "label": "Damen L-UPL"},
     # {"league":  2, "game_class": 11, "label": "Herren NLB"},
 ]
 
-SEASONS = [2025, 2024, 2023, 2022, 2021]
+SEASONS = [2025, 2024, 2023, 2022]  # 2021 and earlier return 400 from the API
 
 # ══════════════════════════════════════════════════════════════════════
 # LEAGUE NORMALIZATION
