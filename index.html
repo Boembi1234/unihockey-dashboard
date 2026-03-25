@@ -860,6 +860,112 @@
   }
   .g-next:hover { opacity: 0.85; }
 
+  /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     MOBILE RESPONSIVE  ≤ 768 px
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+  @media (max-width: 768px) {
+
+    /* ── Header ── */
+    header { padding: 0 14px; height: 52px; }
+    .logo { font-size: 17px; letter-spacing: 1px; }
+    #subtitle { font-size: 10px; max-width: 120px; text-align: right; }
+
+    /* ── Nav tabs – scroll horizontally, no wrap ── */
+    .page-nav { padding: 0 4px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .page-nav::-webkit-scrollbar { display: none; }
+    .page-tab { padding: 12px 14px 9px; font-size: 11px; letter-spacing: 1px; white-space: nowrap; flex-shrink: 0; }
+
+    /* ── Selector bars – stack vertically ── */
+    .selector-bar { padding: 10px 14px; flex-direction: column; align-items: stretch; gap: 8px; }
+    select { min-width: 0 !important; width: 100%; font-size: 15px; padding: 10px 36px 10px 12px; }
+    .player-search-input { min-width: 0 !important; width: 100%; font-size: 15px; }
+    .player-search-wrap { max-width: 100%; flex: 1 1 100%; }
+    .filter-pills { gap: 6px; }
+    .pill { padding: 6px 11px; font-size: 11px; }
+
+    /* ── Main layout ── */
+    .main { padding: 14px; gap: 14px; }
+
+    /* ── KPI rows – 2 × 2 grid ── */
+    .kpi-row { grid-template-columns: 1fr 1fr; gap: 10px; }
+    .kpi { padding: 14px 12px; }
+    .kpi-val { font-size: 28px; }
+    .kpi-label { font-size: 10px; letter-spacing: 1px; }
+
+    /* ── All 2/3-col grids → single column ── */
+    .grid-2, .grid-3 { grid-template-columns: 1fr !important; gap: 14px; }
+
+    /* ── Cards ── */
+    .card { padding: 16px 14px; }
+
+    /* ── Home page ── */
+    #homePage { padding: 0 14px 32px; }
+    .home-hero { padding: 24px 0 18px; }
+    .home-hero-title { font-size: 32px; }
+    .home-hero-meta { gap: 10px; margin-top: 12px; }
+    .home-hero-stat strong { font-size: 17px; }
+    .home-hero-divider { display: none; }
+    .home-nav-grid, .games-grid { grid-template-columns: 1fr !important; gap: 10px; margin: 14px 0 20px; }
+    .home-nav-card { flex-direction: row; text-align: left; padding: 14px 16px; gap: 14px; align-items: center; }
+    .home-nav-icon { font-size: 22px; }
+    .home-nav-title { font-size: 16px; }
+
+    /* ── Player hero ── */
+    .player-hero { flex-direction: column; text-align: center; align-items: center; gap: 10px; }
+    .player-hero-name { font-size: 28px; }
+
+    /* ── Modal ── */
+    .modal { padding: 20px 14px; border-radius: 12px; max-height: 92vh; }
+    .modal-player-header { flex-direction: column; gap: 6px; align-items: flex-start; }
+    .modal-player-name { font-size: 24px; }
+    .modal-grid { grid-template-columns: 1fr; }
+
+    /* ── Game log table – horizontal scroll ── */
+    .tbl-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .game-log { font-size: 11px; min-width: 480px; }
+    .game-log th, .game-log td { padding: 6px 5px; }
+
+    /* ── Scorer row – hide bar on mobile ── */
+    .scorer-bar-wrap { display: none; }
+
+    /* ── Heatmap ── */
+    .heatmap-label { width: 18px; font-size: 9px; }
+    .period-labels { padding-left: 20px; }
+
+    /* ── Day/time grid ── */
+    .daytime-row-label { width: 48px; font-size: 9px; }
+    .daytime-col-labels { padding-left: 56px; }
+    .daytime-cell { font-size: 12px; padding: 6px 2px; }
+
+    /* ── Home/Away boxes ── */
+    .ha-box .val { font-size: 28px; }
+    .ha-box { padding: 12px 10px; }
+
+    /* ── Streak boxes ── */
+    .streak-box { width: 22px; height: 22px; font-size: 10px; }
+
+    /* ── Section headers ── */
+    .sec-hdr { padding: 10px 12px; font-size: 10px; margin-top: 14px; }
+
+    /* ── Matrix wrap ── */
+    .matrix-wrap { max-height: 340px; }
+
+    /* ── Quiz game cards ── */
+    .game-panel { padding: 12px; }
+    .g-duel-btn { padding: 10px 6px; }
+    .g-duel-name { font-size: 12px; }
+    .g-choice { font-size: 11px; padding: 8px 5px; }
+    .g-result { font-size: 22px; }
+  }
+
+  /* ── Very small phones ≤ 390px ── */
+  @media (max-width: 390px) {
+    .home-hero-title { font-size: 26px; }
+    .kpi-val { font-size: 24px; }
+    .page-tab { padding: 12px 10px 9px; font-size: 10px; }
+    .kpi-row { grid-template-columns: 1fr 1fr; }
+  }
+
 </style>
 </head>
 <body>
@@ -1653,6 +1759,23 @@ function renderDashboard() {
       <div class="kpi" style="--accent-color:#9b59b6"><div class="kpi-val">${poGames.length ? Math.round(poWins/poGames.length*100)+'%' : '—'}</div><div class="kpi-label">PO-Winrate</div></div>
     </div>` : ''}
 
+    <!-- ── SECTION: Head-to-Head ── -->
+    <div class="sec-hdr" id="sh-h2h" onclick="toggleSec('h2h')">
+      <span>Head-to-Head</span><span class="sec-arrow">▾</span>
+    </div>
+    <div class="sec-body" id="sb-h2h">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+        <span style="font-size:11px;color:var(--muted);white-space:nowrap">Gegner wählen:</span>
+        <select id="h2hOpponentSelect" onchange="renderH2H()"
+          style="flex:1;min-width:180px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-family:inherit;font-size:12px">
+          <option value="">— Gegner —</option>
+        </select>
+      </div>
+      <div id="h2hContent">
+        <div style="color:var(--muted);font-size:12px;text-align:center;padding:20px 0">Wähle einen Gegner für den Direktvergleich</div>
+      </div>
+    </div>
+
     <!-- ── SECTION: Special Teams (always) ── -->
     <div class="sec-hdr" id="sh-pen" onclick="toggleSec('pen')">
       <span>Special Teams — Strafen · Powerplay · Boxplay</span><span class="sec-arrow">▾</span>
@@ -1853,6 +1976,9 @@ function renderDashboard() {
 
   `;
 
+  // Populate H2H opponent dropdown
+  buildH2HOpponentList(teamGames);
+
   // Always-visible sections
   renderRecordPlayers(scoredGoals);
   renderTopScorers(scoredGoals, concededGoals);
@@ -1888,7 +2014,7 @@ function renderDashboard() {
   }
 
   // Apply collapsible states AFTER all charts are rendered
-  const secDefaults = { records: true, pen: true, scorer: true, stats: true };
+  const secDefaults = { h2h: true, records: true, pen: true, scorer: true, stats: true };
   if (!allTime) { secDefaults.tor = true; secDefaults.verlauf = false; }
   initSecs(secDefaults);
 }
@@ -2470,6 +2596,289 @@ function renderTopScorers(scored, conceded) {
 // ─────────────────────────────────────────────
 // Record players
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// Head-to-Head
+// ─────────────────────────────────────────────
+function buildH2HOpponentList(teamGames) {
+  const sel = document.getElementById('h2hOpponentSelect');
+  if (!sel) return;
+  // Collect all distinct opponents from teamGames
+  const oppCount = {};
+  teamGames.forEach(g => {
+    const isHome = selectedTeamIds.has(g.home_team_id) || selectedTeamNames.has(g.home_team_raw);
+    const opp = isHome ? g.away_team_raw : g.home_team_raw;
+    if (opp && !selectedTeamNames.has(opp)) {
+      oppCount[opp] = (oppCount[opp] || 0) + 1;
+    }
+  });
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— Gegner —</option>';
+  Object.entries(oppCount)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([opp, cnt]) => {
+      const o = document.createElement('option');
+      o.value = opp;
+      o.textContent = `${opp} (${cnt} Sp.)`;
+      sel.appendChild(o);
+    });
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+function renderH2H() {
+  const sel = document.getElementById('h2hOpponentSelect');
+  const container = document.getElementById('h2hContent');
+  if (!sel || !container) return;
+  const opp = sel.value;
+  if (!opp) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:20px 0">Wähle einen Gegner für den Direktvergleich</div>';
+    return;
+  }
+
+  // Filter games involving exactly this opponent
+  const h2hGames = teamGamesGlobal.filter(g => {
+    return (selectedTeamIds.has(g.home_team_id) || selectedTeamNames.has(g.home_team_raw)) && g.away_team_raw === opp
+        || (selectedTeamIds.has(g.away_team_id) || selectedTeamNames.has(g.away_team_raw)) && g.home_team_raw === opp;
+  });
+  if (!selectedSeason || selectedSeason !== 'all') {
+    // already filtered by getTeamGames()
+  }
+
+  // Goals for/against in H2H
+  const h2hGameIds = new Set(h2hGames.map(g => g.game_id));
+  const h2hScored    = scoredGoalsGlobal.filter(g => h2hGameIds.has(g.game_id));
+  const h2hConceded  = concededGoalsGlobal.filter(g => h2hGameIds.has(g.game_id));
+
+  // W/L/D overall
+  let wins=0, losses=0, draws=0, goalsFor=0, goalsAgainst=0;
+  h2hGames.forEach(g => {
+    const [h, a] = (g.result||'').split(':').map(Number);
+    if (isNaN(h)||isNaN(a)) return;
+    const isHome = selectedTeamIds.has(g.home_team_id) || selectedTeamNames.has(g.home_team_raw);
+    const myG = isHome ? h : a, oppG = isHome ? a : h;
+    goalsFor += myG; goalsAgainst += oppG;
+    if (myG > oppG) wins++; else if (myG < oppG) losses++; else draws++;
+  });
+
+  // Playoff series
+  const poPhases = new Set(['Viertelfinal','Halbfinal','Final','Playoff','Superfinal']);
+  const poGames = h2hGames.filter(g => poPhases.has(g.phase));
+  // Group playoff games into series by (season, phase)
+  const seriesMap = {};
+  poGames.forEach(g => {
+    const key = `${g.season}||${g.phase}`;
+    if (!seriesMap[key]) seriesMap[key] = { season: g.season, phase: g.phase, myW: 0, oppW: 0, games: [] };
+    const [h, a] = (g.result||'').split(':').map(Number);
+    if (isNaN(h)||isNaN(a)) return;
+    const isHome = selectedTeamIds.has(g.home_team_id) || selectedTeamNames.has(g.home_team_raw);
+    const myG = isHome ? h : a, oppG = isHome ? a : h;
+    if (myG > oppG) seriesMap[key].myW++; else if (myG < oppG) seriesMap[key].oppW++;
+    seriesMap[key].games.push({ date: g.date, result: g.result, isHome });
+  });
+  const series = Object.values(seriesMap).sort((a, b) => b.season - a.season);
+
+  // Top scorers in H2H games
+  const scorerMap = {}, assistMap = {};
+  h2hScored.forEach(g => {
+    if (g.scorer_raw) scorerMap[g.scorer_raw] = (scorerMap[g.scorer_raw]||0)+1;
+    if (g.assist_raw) assistMap[g.assist_raw] = (assistMap[g.assist_raw]||0)+1;
+  });
+  const topScorers = Object.entries(scorerMap).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const topAssists = Object.entries(assistMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  // Biggest wins and losses
+  const results = h2hGames
+    .map(g => {
+      const [h,a] = (g.result||'').split(':').map(Number);
+      if (isNaN(h)||isNaN(a)) return null;
+      const isHome = selectedTeamIds.has(g.home_team_id) || selectedTeamNames.has(g.home_team_raw);
+      const myG = isHome ? h : a, oppG = isHome ? a : h;
+      return { date: g.date, result: g.result, myG, oppG, diff: myG-oppG, isHome, phase: g.phase, season: g.season };
+    }).filter(Boolean);
+  const biggestWin  = results.filter(r=>r.diff>0).sort((a,b)=>b.diff-a.diff)[0];
+  const biggestLoss = results.filter(r=>r.diff<0).sort((a,b)=>a.diff-b.diff)[0];
+
+  // Recent form (last 10)
+  const recent = [...results].sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,10);
+  const formDots = recent.map(r => {
+    const col = r.diff > 0 ? 'var(--score)' : r.diff < 0 ? 'var(--concede)' : '#f39c12';
+    const label = r.diff > 0 ? 'S' : r.diff < 0 ? 'N' : 'U';
+    return `<span title="${r.date}: ${r.result}" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:${col}22;border:1px solid ${col};color:${col};font-size:9px;font-weight:700;font-family:'Barlow Condensed',sans-serif">${label}</span>`;
+  }).join('');
+
+  // H/A split
+  const homeGames = h2hGames.filter(g => selectedTeamIds.has(g.home_team_id)||selectedTeamNames.has(g.home_team_raw));
+  const awayGames = h2hGames.filter(g => selectedTeamIds.has(g.away_team_id)||selectedTeamNames.has(g.away_team_raw));
+  const haStats = (games) => {
+    let w=0,l=0,d=0,gf=0,ga=0;
+    games.forEach(g => {
+      const [h,a]=(g.result||'').split(':').map(Number);
+      if(isNaN(h)||isNaN(a))return;
+      const isHome=selectedTeamIds.has(g.home_team_id)||selectedTeamNames.has(g.home_team_raw);
+      const my=isHome?h:a, op=isHome?a:h; gf+=my;ga+=op;
+      if(my>op)w++;else if(my<op)l++;else d++;
+    });
+    return {w,l,d,gf,ga};
+  };
+  const homeS = haStats(homeGames), awayS = haStats(awayGames);
+
+  // Phase colors
+  const phaseCol = { 'Viertelfinal':'#9b59b6','Halbfinal':'#e67e22','Final':'#e74c3c','Playoff':'#e67e22','Superfinal':'#e74c3c' };
+  const myName = selectedClubName || [...selectedTeamNames][0] || 'Wir';
+  const wPct = h2hGames.length ? Math.round(wins/h2hGames.length*100) : 0;
+
+  const maxScorerVal = topScorers[0]?.[1]||1;
+  const maxAssistVal = topAssists[0]?.[1]||1;
+
+  container.innerHTML = `
+    <!-- Overall record -->
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px">
+        ${escH(myName)} vs ${escH(opp)} · ${h2hGames.length} Spiele
+      </div>
+      <div style="display:flex;align-items:center;justify-content:center;gap:0;font-family:'Barlow Condensed',sans-serif">
+        <div style="flex:1;text-align:right;padding-right:16px">
+          <div style="font-size:42px;font-weight:900;color:var(--score)">${wins}</div>
+          <div style="font-size:10px;color:var(--muted);letter-spacing:1px">SIEGE</div>
+        </div>
+        <div style="padding:0 12px;border-left:1px solid var(--border);border-right:1px solid var(--border)">
+          <div style="font-size:28px;font-weight:900;color:var(--muted)">${draws}</div>
+          <div style="font-size:9px;color:var(--muted)">UNENT.</div>
+        </div>
+        <div style="flex:1;text-align:left;padding-left:16px">
+          <div style="font-size:42px;font-weight:900;color:var(--concede)">${losses}</div>
+          <div style="font-size:10px;color:var(--muted);letter-spacing:1px">NIED.</div>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px">${goalsFor} Tore : ${goalsAgainst} kassiert · ${wPct}% Winrate</div>
+    </div>
+
+    <!-- Recent form -->
+    ${recent.length ? `
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="font-size:10px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Letzte ${recent.length} Spiele</div>
+      <div style="display:flex;gap:4px;justify-content:center;flex-wrap:wrap">${formDots}</div>
+    </div>` : ''}
+
+    <div class="grid-2" style="margin-bottom:16px">
+      <!-- Home/Away split -->
+      <div class="card">
+        <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>Heim vs. Auswärts</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px">
+          ${[['🏠 Heimspiele', homeS, homeGames.length], ['✈️ Auswärtsspiele', awayS, awayGames.length]].map(([label, s, n]) => `
+            <div style="background:var(--surface2);border-radius:6px;padding:10px;text-align:center">
+              <div style="font-size:10px;color:var(--muted);margin-bottom:6px">${label} (${n})</div>
+              <div style="font-size:18px;font-weight:700;font-family:'Barlow Condensed',sans-serif">
+                <span style="color:var(--score)">${s.w}</span>
+                <span style="color:var(--muted);font-size:14px"> / ${s.d} / </span>
+                <span style="color:var(--concede)">${s.l}</span>
+              </div>
+              <div style="font-size:10px;color:var(--muted);margin-top:3px">${s.gf}:${s.ga} Tore</div>
+            </div>`).join('')}
+        </div>
+        ${biggestWin||biggestLoss ? `
+        <div style="margin-top:12px;font-size:11px;color:var(--muted)">
+          ${biggestWin ? `<div>🏆 Grösster Sieg: <span style="color:var(--score);font-weight:600">${biggestWin.result}</span> <span style="font-size:10px">(${biggestWin.date||''}${biggestWin.phase&&biggestWin.phase!=='Qualifikation'?' · '+biggestWin.phase:''})</span></div>` : ''}
+          ${biggestLoss ? `<div>💔 Grösste Niederlage: <span style="color:var(--concede);font-weight:600">${biggestLoss.result}</span> <span style="font-size:10px">(${biggestLoss.date||''}${biggestLoss.phase&&biggestLoss.phase!=='Qualifikation'?' · '+biggestLoss.phase:''})</span></div>` : ''}
+        </div>` : ''}
+      </div>
+
+      <!-- Top scorers -->
+      <div class="card">
+        <div class="card-title"><span class="dot" style="background:var(--score)"></span>Topscorer in diesem Duell</div>
+        ${topScorers.length ? topScorers.map(([n,c]) => {
+          const info = (g1PlayerInfo||{})[n]||{};
+          const dn = info.full||n;
+          const safeN = n.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+          return `<div class="scorer-row" onclick="navigateToPlayer('${safeN}')" title="Zum Spielerprofil" style="cursor:pointer">
+            <span class="scorer-name">${escH(dn)}</span>
+            <div class="scorer-bar-wrap"><div class="scorer-bar" style="width:${(c/maxScorerVal*100).toFixed(0)}%;background:var(--score)"></div></div>
+            <span class="scorer-goals" style="color:var(--score)">${c}</span>
+            <span class="scorer-assists" style="color:var(--muted);font-size:10px">Tore</span>
+            <span style="font-size:11px;color:var(--muted);margin-left:2px;opacity:0.6">›</span>
+          </div>`;
+        }).join('') : '<div style="color:var(--muted);font-size:12px;padding:8px 0">Keine Daten</div>'}
+        ${topAssists.length ? `
+          <div style="font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin:10px 0 6px">Meiste Assists</div>
+          ${topAssists.map(([n,c]) => {
+            const info = (g1PlayerInfo||{})[n]||{};
+            const dn = info.full||n;
+            const safeN = n.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+            return `<div class="scorer-row" onclick="navigateToPlayer('${safeN}')" title="Zum Spielerprofil" style="cursor:pointer">
+              <span class="scorer-name">${escH(dn)}</span>
+              <div class="scorer-bar-wrap"><div class="scorer-bar" style="width:${(c/maxAssistVal*100).toFixed(0)}%;background:var(--accent3)"></div></div>
+              <span class="scorer-goals" style="color:var(--accent3)">${c}</span>
+              <span class="scorer-assists" style="color:var(--muted);font-size:10px">Ast.</span>
+              <span style="font-size:11px;color:var(--muted);margin-left:2px;opacity:0.6">›</span>
+            </div>`;
+          }).join('')}` : ''}
+      </div>
+    </div>
+
+    <!-- Playoff series -->
+    ${series.length ? `
+    <div class="card">
+      <div class="card-title"><span class="dot" style="background:#9b59b6"></span>Playoff-Serien</div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+        ${series.map(s => {
+          const ssn = `${s.season}/${String(s.season+1).slice(-2)}`;
+          const col = phaseCol[s.phase]||'#9b59b6';
+          const myWon = s.myW > s.oppW;
+          const tied  = s.myW === s.oppW;
+          const resultsStr = s.games.sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(g => {
+            const [h,a] = (g.result||'').split(':').map(Number);
+            const my = g.isHome?h:a, op=g.isHome?a:h;
+            const c = my>op?'var(--score)':my<op?'var(--concede)':'#f39c12';
+            return `<span style="color:${c};font-size:11px;font-weight:600">${g.result}</span>`;
+          }).join(' · ');
+          return `
+          <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;border-left:3px solid ${col}">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <span style="font-size:10px;font-weight:700;letter-spacing:1px;color:${col};text-transform:uppercase">${s.phase} ${ssn}</span>
+              <span style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:900;color:${myWon?'var(--score)':tied?'#f39c12':'var(--concede)'}">
+                ${s.myW} : ${s.oppW}
+              </span>
+            </div>
+            <div style="font-size:10px;color:var(--muted)">${resultsStr}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- Full game history -->
+    <div class="card" style="margin-top:16px">
+      <div class="card-title"><span class="dot"></span>Alle Spiele im Direktvergleich</div>
+      <div style="overflow-x:auto;max-height:320px;overflow-y:auto">
+        <table class="game-log" style="width:100%">
+          <thead><tr>
+            <th>Datum</th><th>Heim</th><th>Resultat</th><th>Auswärts</th><th>Phase</th><th>Saison</th>
+          </tr></thead>
+          <tbody>
+            ${[...results].sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(r => {
+              const won  = r.diff > 0;
+              const lost = r.diff < 0;
+              const resCol = won ? 'var(--score)' : lost ? 'var(--concede)' : '#f39c12';
+              const hTeam = h2hGames.find(g=>g.date===r.date&&g.result===r.result);
+              const homeTeam = hTeam ? hTeam.home_team_raw : '—';
+              const awayTeam = hTeam ? hTeam.away_team_raw : '—';
+              const ssn = r.season ? `${r.season}/${String(r.season+1).slice(-2)}` : '—';
+              const ph = r.phase && r.phase!=='Qualifikation' ? r.phase : '';
+              const phBadge = ph ? `<span style="font-size:8px;padding:1px 4px;border-radius:3px;font-weight:700;background:${phaseCol[ph]||'#9b59b6'}22;color:${phaseCol[ph]||'#9b59b6'};border:1px solid ${phaseCol[ph]||'#9b59b6'}55">${ph}</span>` : '—';
+              return `<tr>
+                <td style="color:var(--muted);white-space:nowrap">${r.date||'—'}</td>
+                <td style="font-size:11px">${escH(homeTeam)}</td>
+                <td style="font-weight:700;color:${resCol};font-family:'Barlow Condensed',sans-serif;font-size:15px">${r.result}</td>
+                <td style="font-size:11px">${escH(awayTeam)}</td>
+                <td>${phBadge}</td>
+                <td style="color:var(--muted)">${ssn}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 function renderRecordPlayers(scored) {
   const clubGameIds = new Set(teamGamesGlobal.map(g => g.game_id));
   const meta = DB.player_meta || {};
