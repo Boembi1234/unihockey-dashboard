@@ -59,8 +59,14 @@ LEAGUE_MAP = {
 def norm_league(name):
     return LEAGUE_MAP.get(name, name) if name else name
 
+_CLUB_ALIASES = {
+    "Waldkirch-St. Gallen": "WASA St. Gallen",
+}
+
 def derive_club(name):
-    return re.sub(r'\s+(II|III|IV|V|VI|I|Ost|Bern)$', '', name.strip())
+    name = name.strip()
+    name = re.sub(r'\s+(II|III|IV|V|VI|I|Ost|Bern)$', '', name)
+    return _CLUB_ALIASES.get(name, name)
 
 # ══════════════════════════════════════════════════════════════════════
 # DATABASE SCHEMA
@@ -77,7 +83,8 @@ CREATE TABLE IF NOT EXISTS games (
     home_team_raw TEXT,    away_team_raw TEXT,
     date TEXT, weekday TEXT, time TEXT, season INTEGER,
     league TEXT, league_group TEXT, result TEXT,
-    location TEXT, location_city TEXT
+    location TEXT, location_city TEXT,
+    phase TEXT DEFAULT 'Qualifikation'
 );
 CREATE TABLE IF NOT EXISTS goals (
     goal_id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,6 +110,25 @@ CREATE TABLE IF NOT EXISTS penalties (
 CREATE INDEX IF NOT EXISTS idx_pen_game   ON penalties(game_id);
 CREATE INDEX IF NOT EXISTS idx_pen_player ON penalties(player_raw);
 CREATE INDEX IF NOT EXISTS idx_pen_team   ON penalties(team_id);
+CREATE TABLE IF NOT EXISTS lineups (
+    lineup_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id       TEXT,
+    team_id       INTEGER,
+    team_raw      TEXT,
+    player_raw    TEXT,
+    player_id     INTEGER,
+    jersey_number TEXT,
+    position      TEXT,
+    season        INTEGER,
+    date          TEXT,
+    UNIQUE(game_id, team_id, player_raw)
+);
+CREATE INDEX IF NOT EXISTS idx_lin_player ON lineups(player_raw);
+CREATE INDEX IF NOT EXISTS idx_lin_game   ON lineups(game_id);
+CREATE TABLE IF NOT EXISTS name_map (
+    abbrev_name TEXT PRIMARY KEY,
+    full_name   TEXT NOT NULL
+);
 """
 
 # ══════════════════════════════════════════════════════════════════════
@@ -414,6 +440,116 @@ def fetch_and_store_goals(conn, game_id, home_id, away_id,
 # BACKFILL PENALTIES for already-stored games
 # ══════════════════════════════════════════════════════════════════════
 
+def phase_from_label(label):
+    """Map a round slider label to a human-readable phase name."""
+    if not label:
+        return 'Qualifikation'
+    low = label.lower()
+    if 'superfinal' in low:
+        return 'Superfinal'
+    if 'final' in low and 'halb' in low:
+        return 'Halbfinal'
+    if 'final' in low and 'viertel' in low:
+        return 'Viertelfinal'
+    if 'playoff' in low or 'final' in low:
+        return 'Playoff'
+    return 'Qualifikation'
+
+
+def backfill_game_phases(conn):
+    """Traverse all rounds for every stored league+season and write the phase column."""
+    # Ensure column exists (for DBs created before this change)
+    try:
+        conn.execute("ALTER TABLE games ADD COLUMN phase TEXT DEFAULT 'Qualifikation'")
+        conn.commit()
+        log.info("  Added 'phase' column to games table.")
+    except Exception:
+        pass  # column already exists
+
+    # Build set of (league, season) combos that already have playoff games tagged
+    already_done = set()
+    rows = conn.execute(
+        "SELECT DISTINCT league, season FROM games WHERE phase != 'Qualifikation' AND phase IS NOT NULL AND phase != ''"
+    ).fetchall()
+    for r in rows:
+        already_done.add((r[0], r[1]))
+    if already_done:
+        log.info(f"  Phases: {len(already_done)} league/season combos already have playoff tags; skipping those.")
+
+    # Use TARGET_LEAGUES config to know which league+season combos to traverse
+    updated = 0
+    for lg_cfg in TARGET_LEAGUES:
+        league_id  = lg_cfg['league']
+        game_class = lg_cfg['game_class']
+        label_name = lg_cfg['label']
+        for season in lg_cfg.get('seasons', SEASONS):
+            # Skip seasons we already tagged (use label_name as stored in DB)
+            if (label_name, season) in already_done or (norm_league(label_name), season) in already_done:
+                log.info(f"  Phases: {label_name} {season} already tagged, skipping.")
+                continue
+
+            log.info(f"  Phases: league={league_id} ({label_name}) season={season}…")
+            base_params = {'mode': 'list', 'league': league_id,
+                           'game_class': game_class, 'season': season}
+
+            # BFS over all rounds: follow both prev AND next to handle APIs
+            # that return round 1 by default (old seasons) or last round (recent seasons)
+            visited = set()
+            queue   = [None]  # None = default starting round
+
+            while queue:
+                round_param = queue.pop(0)
+                visit_key   = round_param if round_param is not None else '__default__'
+                if visit_key in visited:
+                    continue
+                visited.add(visit_key)
+
+                params = dict(base_params)
+                if round_param is not None:
+                    params['round'] = round_param
+
+                raw = api_get('games', params)
+                if not raw:
+                    continue
+
+                data   = unwrap(raw)
+                slider = data.get('slider', {})
+                label  = slider.get('text', '')
+                phase  = phase_from_label(label)
+
+                # Collect all game_ids in this round
+                gids_in_round = []
+                for region in data.get('regions', []):
+                    for row in region.get('rows', []):
+                        for cell in row.get('cells', []):
+                            lnk = cell.get('link') or {}
+                            if lnk.get('page') == 'game_detail':
+                                for gid in lnk.get('ids', []):
+                                    gids_in_round.append(str(gid))
+
+                if gids_in_round and phase != 'Qualifikation':
+                    ph = ','.join('?' * len(gids_in_round))
+                    conn.execute(
+                        f"UPDATE games SET phase=? WHERE game_id IN ({ph})",
+                        [phase] + gids_in_round
+                    )
+                    updated += len(gids_in_round)
+                    log.info(f"    [{repr(label)}] → {phase}: {len(gids_in_round)} games")
+
+                # Enqueue prev and next rounds
+                prev = slider.get('prev', {}).get('set_in_context', {}).get('round')
+                nxt  = slider.get('next', {}).get('set_in_context', {}).get('round')
+                if prev and prev not in visited:
+                    queue.append(prev)
+                if nxt and nxt not in visited:
+                    queue.append(nxt)
+
+                time.sleep(SLEEP)
+
+    conn.commit()
+    log.info(f"  Phases: updated {updated} playoff/final games.")
+
+
 def backfill_penalties(conn):
     """Fetch penalty events for every stored game that has no penalties yet."""
     all_games = conn.execute(
@@ -438,6 +574,152 @@ def backfill_penalties(conn):
             log.info(f"    {i}/{len(todo)} games processed…")
     conn.commit()
     log.info(f"  Backfill complete: {total_pen} penalties stored.")
+
+# ══════════════════════════════════════════════════════════════════════
+# NAME MATCHING  (abbreviated scorer names → full lineup names)
+# ══════════════════════════════════════════════════════════════════════
+
+def _norm(s):
+    """Normalize a name fragment for fuzzy comparison."""
+    s = s.lower().strip()
+    for old, new in [('ü','u'),('ö','o'),('ä','a'),('ß','ss'),
+                     ('é','e'),('è','e'),('ê','e'),('à','a'),('â','a'),
+                     ('î','i'),('ô','o'),('û','u'),("'",''),('-','')]:
+        s = s.replace(old, new)
+    return s
+
+def _parse_abbrev(name):
+    """'D. Hasenbühler' → ('D', 'Hasenbühler').  Returns (None,None) if not abbreviated."""
+    m = re.match(r'^([A-Za-z])\.\s+(.+)$', name.strip())
+    return (m.group(1).upper(), m.group(2).strip()) if m else (None, None)
+
+def _match_abbrev(abbrev, full_names):
+    """Return the single full name that matches the abbreviation, or None."""
+    initial, last = _parse_abbrev(abbrev)
+    if not initial:
+        return None
+    last_n = _norm(last)
+    hits = [f for f in full_names
+            if f and f[0].upper() == initial
+            and _norm(f.split()[-1]) == last_n]
+    return hits[0] if len(hits) == 1 else None
+
+def build_name_map(conn):
+    """Match every abbreviated scorer/penalty name to a full lineup name.
+    Only confident (unique) matches are stored."""
+    existing = conn.execute("SELECT COUNT(*) FROM name_map").fetchone()[0]
+    if existing > 0:
+        log.info(f"  name_map already has {existing} entries — skipping rebuild.")
+        return
+
+    log.info("  Building name_map from lineups + game events…")
+    mapping   = {}   # abbrev → full  (confirmed)
+    conflicts = set()
+
+    def try_add(abbrev, full_names):
+        if not abbrev or abbrev in conflicts:
+            return
+        full = _match_abbrev(abbrev, full_names)
+        if not full:
+            return
+        if abbrev in mapping:
+            if mapping[abbrev] != full:
+                conflicts.add(abbrev)
+                del mapping[abbrev]
+        else:
+            mapping[abbrev] = full
+
+    # Preload lineups grouped by game_id (both teams combined — avoids home/away ID mismatch)
+    lineup_index = {}   # game_id → [full_name, ...]
+    for gid, player in conn.execute("SELECT game_id, player_raw FROM lineups"):
+        lineup_index.setdefault(gid, []).append(player)
+
+    # Match goal scorers / assisters
+    for gid, scorer, assist in conn.execute(
+        "SELECT game_id, scorer_raw, assist_raw FROM goals"
+    ):
+        names = lineup_index.get(gid, [])
+        try_add(scorer, names)
+        try_add(assist, names)
+
+    # Match penalty players
+    for gid, player in conn.execute(
+        "SELECT game_id, player_raw FROM penalties WHERE player_raw IS NOT NULL"
+    ):
+        names = lineup_index.get(gid, [])
+        try_add(player, names)
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO name_map (abbrev_name, full_name) VALUES (?,?)",
+        mapping.items()
+    )
+    conn.commit()
+    log.info(f"  name_map: {len(mapping)} matches built, {len(conflicts)} conflicts skipped.")
+
+# ══════════════════════════════════════════════════════════════════════
+# LINEUPS  (GET /api/games/:game_id/teams/:is_home/players)
+# ══════════════════════════════════════════════════════════════════════
+
+def fetch_and_store_lineup(conn, game_id, team_id, is_home, team_name, season, date):
+    """Fetch the lineup for one side of a game. Returns player count stored."""
+    raw = api_get(f"games/{game_id}/teams/{is_home}/players")
+    if not raw:
+        return 0
+    count = 0
+    for region in unwrap(raw).get("regions", []):
+        for row in region.get("rows", []):
+            cells = row.get("cells", [])
+            if len(cells) < 3:
+                continue
+            jersey  = cell_text(cells[0]) or None
+            # position cell may have ["Verteidiger"] or ["Verteidiger","Captain"] or [None]
+            pos_list = cells[1].get("text", []) if isinstance(cells[1], dict) else []
+            position = next((p for p in pos_list if p), None)
+            player   = cell_text(cells[2]) or None
+            if not player:
+                continue
+            # player_id lives in cells[2].link.ids[0]
+            pid = None
+            try:
+                pid = cells[2].get("link", {}).get("ids", [None])[0]
+            except Exception:
+                pass
+            try:
+                conn.execute("""
+                    INSERT OR IGNORE INTO lineups
+                      (game_id, team_id, team_raw, player_raw, player_id,
+                       jersey_number, position, season, date)
+                    VALUES (?,?,?,?,?,?,?,?,?)
+                """, (game_id, team_id, team_name, player, pid,
+                      jersey, position, season, date))
+                count += 1
+            except Exception as e:
+                log.debug(f"  lineup insert skip: {e}")
+    return count
+
+def backfill_lineups(conn):
+    """Fetch lineups for every stored game that has none yet."""
+    all_games = conn.execute(
+        "SELECT game_id, home_team_id, away_team_id, home_team_raw, away_team_raw, "
+        "date, season FROM games"
+    ).fetchall()
+    done_ids = {r[0] for r in conn.execute("SELECT DISTINCT game_id FROM lineups")}
+    todo = [g for g in all_games if g[0] not in done_ids]
+    if not todo:
+        log.info("  Lineups already up-to-date.")
+        return
+    log.info(f"  Backfilling lineups for {len(todo)} games (2 API calls each)…")
+    total = 0
+    for i, (gid, home_id, away_id, home_name, away_name, gdate, season) in enumerate(todo, 1):
+        for is_home, team_id, team_name in [(0, away_id, away_name), (1, home_id, home_name)]:
+            time.sleep(SLEEP)
+            total += fetch_and_store_lineup(conn, gid, team_id, is_home,
+                                            team_name, season, gdate)
+        if i % 50 == 0:
+            conn.commit()
+            log.info(f"    {i}/{len(todo)} games processed…")
+    conn.commit()
+    log.info(f"  Lineup backfill complete: {total} player-game records stored.")
 
 # ══════════════════════════════════════════════════════════════════════
 # EXPORT data.json (dashboard-compatible)
@@ -522,8 +804,54 @@ def export_json(conn):
         penalties.append(row)
 
     seasons = sorted(set(g['season'] for g in games if g.get('season')))
-    data    = {'clubs': clubs_list, 'goals': goals, 'games': games,
-               'penalties': penalties, 'seasons': seasons}
+
+    # ── Player meta: position + exact games played from lineups ──────────
+    # Most-common non-null position per player
+    pos_map = {}
+    for name, pos in conn.execute("""
+        SELECT player_raw, position FROM lineups
+        WHERE position IS NOT NULL
+        GROUP BY player_raw, position
+        ORDER BY player_raw, COUNT(*) DESC
+    """):
+        pos_map.setdefault(name, pos)   # first row = most frequent position
+
+    # Total games played per player
+    gp_total = {name: gp for name, gp in conn.execute(
+        "SELECT player_raw, COUNT(*) FROM lineups GROUP BY player_raw")}
+
+    # Games played per player per season (for per-season filtering in dashboard)
+    gp_seasons = {}
+    for name, season, gp in conn.execute(
+        "SELECT player_raw, season, COUNT(*) FROM lineups GROUP BY player_raw, season"
+    ):
+        gp_seasons.setdefault(name, {})[str(season)] = gp
+
+    # name_map: full_name → abbrev_name  (so we key player_meta by abbreviated names)
+    full_to_abbrev = {full: abbrev for abbrev, full in conn.execute(
+        "SELECT abbrev_name, full_name FROM name_map"
+    )}
+
+    # Game IDs per full name, ordered by date
+    player_game_ids = {}
+    for full_name, game_id in conn.execute(
+        "SELECT player_raw, game_id FROM lineups ORDER BY date, game_id"
+    ):
+        player_game_ids.setdefault(full_name, []).append(game_id)
+
+    player_meta = {}
+    for full_name in set(list(gp_total.keys()) + list(pos_map.keys())):
+        key = full_to_abbrev.get(full_name, full_name)  # prefer abbreviated key
+        player_meta[key] = {
+            "pos":   pos_map.get(full_name),
+            "gp":    gp_total.get(full_name, 0),
+            "gp_s":  gp_seasons.get(full_name, {}),
+            "full":  full_name if key != full_name else None,  # only set if different from key
+            "gids":  player_game_ids.get(full_name, []),
+        }
+
+    data = {'clubs': clubs_list, 'goals': goals, 'games': games,
+            'penalties': penalties, 'seasons': seasons, 'player_meta': player_meta}
 
     with open(JSON_PATH, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
@@ -533,9 +861,10 @@ def export_json(conn):
     log.info(f"    Clubs:     {len(clubs_list)}")
     log.info(f"    Games:     {len(games)}")
     log.info(f"    Goals:     {len(goals)}")
-    log.info(f"    Penalties: {len(penalties)}")
-    log.info(f"    Seasons:   {seasons}")
-    log.info(f"    Size:      {size_mb:.2f} MB")
+    log.info(f"    Penalties:   {len(penalties)}")
+    log.info(f"    PlayerMeta:  {len(player_meta)} players")
+    log.info(f"    Seasons:     {seasons}")
+    log.info(f"    Size:        {size_mb:.2f} MB")
 
 # ══════════════════════════════════════════════════════════════════════
 # MAIN
@@ -578,6 +907,12 @@ def run():
                 total_games += 1
                 total_goals += ng
                 total_pen   += np
+                # also fetch lineups for the new game
+                time.sleep(SLEEP)
+                for is_home, tid, tname in [(0, away_id, away_name), (1, home_id, home_name)]:
+                    time.sleep(SLEEP)
+                    fetch_and_store_lineup(conn, gid, tid, is_home, tname, season, iso_date)
+                conn.commit()
                 log.info(f"  ✓ {home_name} vs {away_name}  [{iso_date}]  {ng} goals  {np} pen")
 
     log.info(f"\n── New games ─────────────────")
@@ -586,6 +921,12 @@ def run():
     log.info(f"  Penalties:    {total_pen}")
     log.info(f"\n── Backfilling penalties for existing games…")
     backfill_penalties(conn)
+    log.info(f"\n── Backfilling lineups for existing games…")
+    backfill_lineups(conn)
+    log.info(f"\n── Backfilling game phases (Qualifikation/Playoffs)…")
+    backfill_game_phases(conn)
+    log.info(f"\n── Building name map…")
+    build_name_map(conn)
     export_json(conn)
     conn.close()
 

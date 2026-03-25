@@ -733,6 +733,133 @@
   .game-log .gl-a { color: var(--accent3); font-weight: 700; }
   .game-log .gl-none { color: var(--border); }
 
+
+  /* ── Home / Entry Page ───────────────────────────────────────────────── */
+  #homePage { max-width: 1100px; margin: 0 auto; padding: 0 24px 48px; }
+
+  .home-hero {
+    padding: 48px 0 36px;
+    text-align: center;
+  }
+  .home-hero-eyebrow {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 11px; letter-spacing: 4px; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 10px;
+  }
+  .home-hero-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 52px; font-weight: 900; text-transform: uppercase;
+    color: var(--text); letter-spacing: 2px; line-height: 1;
+  }
+  .home-hero-title span { color: var(--accent); }
+  .home-hero-meta {
+    display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap;
+    margin-top: 16px; font-size: 12px; color: var(--muted);
+  }
+  .home-hero-stat { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .home-hero-stat strong { font-size: 22px; font-family: 'Barlow Condensed', sans-serif; font-weight: 700; color: var(--text); }
+  .home-hero-divider { width: 1px; height: 28px; background: var(--border); }
+
+  .home-nav-grid {
+    display: grid; grid-template-columns: repeat(3,1fr); gap: 12px;
+    margin: 24px 0 32px;
+  }
+  .home-nav-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px 18px; cursor: pointer;
+    transition: border-color 0.2s, transform 0.15s;
+    display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;
+  }
+  .home-nav-card:hover { border-color: var(--accent); transform: translateY(-3px); }
+  .home-nav-card:active { transform: translateY(-1px); }
+  .home-nav-icon { font-size: 28px; }
+  .home-nav-title {
+    font-family: 'Barlow Condensed', sans-serif; font-size: 18px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px; color: var(--text);
+  }
+  .home-nav-sub { font-size: 11px; color: var(--muted); }
+
+  /* ── Games ─────────────────────────────────────────────────────────── */
+  .home-section-label {
+    font-family: 'Barlow Condensed', sans-serif; font-size: 11px; font-weight: 700;
+    letter-spacing: 3px; text-transform: uppercase; color: var(--muted);
+    padding: 0 0 14px; border-bottom: 1px solid var(--border); margin-bottom: 16px;
+  }
+  .games-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
+  @media(max-width:800px) { .home-nav-grid,.games-grid { grid-template-columns:1fr; } }
+
+  .game-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .game-card-hdr {
+    background: var(--surface2); border-bottom: 1px solid var(--border);
+    padding: 10px 14px; display: flex; align-items: center; gap: 8px;
+  }
+  .game-card-icon { font-size: 16px; }
+  .game-card-title {
+    font-family: 'Barlow Condensed', sans-serif; font-size: 13px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px; color: var(--text);
+  }
+  .game-card-desc { font-size: 10px; color: var(--muted); margin-top: 1px; }
+  .game-panel { padding: 14px; min-height: 220px; display: flex; flex-direction: column; }
+
+  .g-streak {
+    font-size: 12px; color: var(--muted); margin-bottom: 10px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .g-streak-val { font-size: 16px; font-weight: 700; color: var(--accent); font-family: 'Barlow Condensed', sans-serif; }
+  .g-prompt {
+    font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
+  }
+
+  /* duel (higher-lower) */
+  .g-duel { display: flex; align-items: stretch; gap: 8px; flex: 1; }
+  .g-duel-btn {
+    flex: 1; padding: 12px 8px; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; cursor: pointer; text-align: center;
+    transition: border-color 0.15s, background 0.15s; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 6px;
+  }
+  .g-duel-btn:hover { border-color: var(--accent); background: rgba(0,229,255,0.06); }
+  .g-duel-name { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.2; }
+  .g-vs {
+    font-family: 'Barlow Condensed', sans-serif; font-size: 14px; font-weight: 900;
+    color: var(--muted); align-self: center; flex-shrink: 0;
+  }
+
+  /* choices (quiz) */
+  .g-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 8px; }
+  .g-choice {
+    padding: 9px 6px; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 7px; cursor: pointer; font-size: 12px; color: var(--text);
+    font-family: 'Barlow', sans-serif; transition: border-color 0.15s, background 0.15s;
+    text-align: center; line-height: 1.3;
+  }
+  .g-choice:hover { border-color: var(--accent); background: rgba(0,229,255,0.06); }
+
+  /* matchup display */
+  .g-matchup { text-align: center; margin: 8px 0 4px; font-size: 12px; color: var(--text); }
+  .g-matchup strong { font-size: 14px; color: var(--text); }
+  .g-meta { font-size: 10px; color: var(--muted); text-align: center; margin-bottom: 8px; }
+  .g-meta-big { font-size: 15px; font-weight: 600; color: var(--text); text-align: center; margin-bottom: 2px; }
+
+  /* result */
+  .g-result {
+    font-family: 'Barlow Condensed', sans-serif; font-size: 28px; font-weight: 900;
+    text-align: center; padding: 6px 0 10px; margin-bottom: 8px; flex: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .g-result.ok { color: var(--score); }
+  .g-result.ng { color: var(--concede); }
+  .g-reveal { font-size: 12px; color: var(--muted); text-align: center; margin-bottom: 12px; line-height: 1.6; }
+  .g-reveal strong { color: var(--text); }
+  .g-next {
+    display: block; width: 100%; padding: 9px;
+    background: var(--accent); border: none; border-radius: 7px;
+    color: #000; font-weight: 700; cursor: pointer; font-family: 'Barlow Condensed', sans-serif;
+    font-size: 14px; letter-spacing: 1px; margin-top: auto;
+    transition: opacity 0.15s;
+  }
+  .g-next:hover { opacity: 0.85; }
+
 </style>
 </head>
 <body>
@@ -743,10 +870,92 @@
 </header>
 
 <nav class="page-nav">
-  <button class="page-tab active" id="tabTeam"   onclick="showPage('team')">Teams</button>
+  <button class="page-tab active" id="tabHome"   onclick="showPage('home')">Start</button>
+  <button class="page-tab"        id="tabTeam"   onclick="showPage('team')">Teams</button>
   <button class="page-tab"        id="tabPlayer" onclick="showPage('player')">Spieler</button>
   <button class="page-tab"        id="tabLeague" onclick="showPage('league')">Liga</button>
 </nav>
+
+<div id="homePage">
+  <div class="home-hero">
+    <div class="home-hero-eyebrow">Swiss Unihockey · Männer Top-Liga</div>
+    <div class="home-hero-title">Swiss <span>Floorball</span> Analytics</div>
+    <div class="home-hero-meta" id="homeHeroMeta">
+      <div class="home-hero-stat"><strong id="hm-games">—</strong>Spiele</div>
+      <div class="home-hero-divider"></div>
+      <div class="home-hero-stat"><strong id="hm-goals">—</strong>Tore</div>
+      <div class="home-hero-divider"></div>
+      <div class="home-hero-stat"><strong id="hm-seasons">—</strong>Saisons</div>
+      <div class="home-hero-divider"></div>
+      <div class="home-hero-stat"><strong id="hm-clubs">—</strong>Vereine</div>
+    </div>
+  </div>
+
+  <div class="home-nav-grid">
+    <div class="home-nav-card" onclick="showPage('team')">
+      <div class="home-nav-icon">🏒</div>
+      <div class="home-nav-title">Teams</div>
+      <div class="home-nav-sub">Vereinsstatistiken, Tor&shy;analyse &amp; Trends</div>
+    </div>
+    <div class="home-nav-card" onclick="showPage('player')">
+      <div class="home-nav-icon">⛸</div>
+      <div class="home-nav-title">Spieler</div>
+      <div class="home-nav-sub">Spielerprofil, Scorer-Ranking &amp; Spiellog</div>
+    </div>
+    <div class="home-nav-card" onclick="showPage('league')">
+      <div class="home-nav-icon">📊</div>
+      <div class="home-nav-title">Liga</div>
+      <div class="home-nav-sub">Ligavergleich, Muster &amp; Strafenstatistik</div>
+    </div>
+  </div>
+
+  <div class="home-section-label">Minigames</div>
+  <div class="games-grid">
+
+    <!-- Game 1: Higher or Lower -->
+    <div class="game-card">
+      <div class="game-card-hdr">
+        <span class="game-card-icon">⚡</span>
+        <div>
+          <div class="game-card-title">Wer hat mehr?</div>
+          <div class="game-card-desc">Mehr Karriere-Tore — Higher or Lower</div>
+        </div>
+      </div>
+      <div class="game-panel" id="g1-panel">
+        <div style="color:var(--muted);font-size:12px;margin:auto;text-align:center">Lädt…</div>
+      </div>
+    </div>
+
+    <!-- Game 2: Guess the Score -->
+    <div class="game-card">
+      <div class="game-card-hdr">
+        <span class="game-card-icon">🎯</span>
+        <div>
+          <div class="game-card-title">Rate das Resultat</div>
+          <div class="game-card-desc">Errate das Endresultat eines echten Spiels</div>
+        </div>
+      </div>
+      <div class="game-panel" id="g2-panel">
+        <div style="color:var(--muted);font-size:12px;margin:auto;text-align:center">Lädt…</div>
+      </div>
+    </div>
+
+    <!-- Game 3: Top Scorer Quiz -->
+    <div class="game-card">
+      <div class="game-card-hdr">
+        <span class="game-card-icon">🏅</span>
+        <div>
+          <div class="game-card-title">Torjäger-Quiz</div>
+          <div class="game-card-desc">Wer war Topscorer bei diesem Verein?</div>
+        </div>
+      </div>
+      <div class="game-panel" id="g3-panel">
+        <div style="color:var(--muted);font-size:12px;margin:auto;text-align:center">Lädt…</div>
+      </div>
+    </div>
+
+  </div>
+</div>
 
 <div id="playerPage" style="display:none">
   <div class="selector-bar">
@@ -781,7 +990,7 @@
   </div>
 </div>
 
-<div class="selector-bar" id="teamSelectorBar">
+<div class="selector-bar" id="teamSelectorBar" style="display:none">
   <span class="selector-label">Verein</span>
   <select id="clubSelect" onchange="onClubChange()"><option value="">— Verein —</option></select>
   <span class="selector-label">Liga</span>
@@ -790,7 +999,7 @@
   <select id="seasonSelect" onchange="setSeason(this.value)" style="min-width:150px"></select>
 </div>
 
-<div class="main" id="mainContent">
+<div class="main" id="mainContent" style="display:none">
   <div class="no-data">Daten werden geladen…</div>
 </div>
 
@@ -853,6 +1062,325 @@ function buildSeasonPills() {
   sel.value = selectedSeason;
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// HOME PAGE + MINIGAMES
+// ══════════════════════════════════════════════════════════════════════
+
+let g1 = { streak:0, best:0, p1:null, p2:null, waiting:false, lastOk:false, mode:'goals' };
+let g2 = { streak:0, best:0, game:null, choices:[], answer:'', waiting:false, lastOk:false };
+let g3 = { streak:0, best:0, pick:null, choices:[], answer:'', waiting:false, lastOk:false };
+
+// Pre-build player info cache for game 1 (clubs + position)
+let g1PlayerInfo = null;
+function buildG1PlayerInfo() {
+  if (g1PlayerInfo) return;
+  g1PlayerInfo = {};
+  const meta = DB.player_meta || {};
+  const clubMap = {}; // name → Set of team names
+  (DB.goals||[]).forEach(g => {
+    if (g.scorer_raw && g.team_scored_raw) {
+      if (!clubMap[g.scorer_raw]) clubMap[g.scorer_raw] = new Set();
+      clubMap[g.scorer_raw].add(g.team_scored_raw);
+    }
+  });
+  allPlayers.forEach(p => {
+    const m = meta[p.name] || {};
+    const clubs = clubMap[p.name] ? [...clubMap[p.name]] : [];
+    // Derive club names (strip suffixes)
+    const clubNames = [...new Set(clubs.map(t => t.replace(/\s+(II|III|IV|V|I)$/,'').trim()))];
+    g1PlayerInfo[p.name] = {
+      pos: m.pos || null,
+      gp: m.gp || 0,
+      clubs: clubNames,
+      full: m.full || p.name,
+      goals: p.goals,
+      assists: p.assists,
+      pts: p.goals + p.assists
+    };
+  });
+}
+
+function initHomePage() {
+  const ng = (DB.games||[]).length;
+  const nl = (DB.goals||[]).length;
+  const ns = (DB.seasons||[]).length || [...new Set((DB.games||[]).map(g=>g.season).filter(Boolean))].length;
+  const nc = (DB.clubs||[]).length;
+  document.getElementById('hm-games').textContent   = ng.toLocaleString('de-CH');
+  document.getElementById('hm-goals').textContent   = nl.toLocaleString('de-CH');
+  document.getElementById('hm-seasons').textContent = ns;
+  document.getElementById('hm-clubs').textContent   = nc;
+  buildG1PlayerInfo();
+  startGame1(); startGame2(); startGame3();
+}
+
+// ── Game 1: Wer hat mehr? ─────────────────────────────────────────────
+const G1_MODES = ['goals','assists','pts','gp'];
+const G1_LABELS = { goals:'Karriere-Tore', assists:'Karriere-Assists', pts:'Karriere-Punkte', gp:'Einsätze (Spiele)' };
+const G1_UNITS  = { goals:'Tore', assists:'Assists', pts:'Punkte', gp:'Spiele' };
+const posColors = { 'Stürmer':'#00e5ff', 'Verteidiger':'#ffd32a', 'Goalie':'#2ecc71' };
+
+function startGame1() {
+  // Rotate through modes for variety
+  const modes = G1_MODES;
+  g1.mode = modes[Math.floor(Math.random()*modes.length)];
+  const field = g1.mode;
+  // For gp-mode, use players with lineup data; otherwise use scoring players
+  let pool;
+  if (field === 'gp') {
+    pool = allPlayers.filter(p => {
+      const info = (g1PlayerInfo||{})[p.name];
+      return info && info.gp >= 15;
+    });
+  } else {
+    const minVal = field === 'goals' ? 8 : field === 'assists' ? 5 : 10;
+    pool = allPlayers.filter(p => {
+      const info = (g1PlayerInfo||{})[p.name];
+      return info && info[field] >= minVal;
+    });
+  }
+  if (pool.length < 2) { g1.mode = 'goals'; startGame1(); return; }
+  let i = Math.floor(Math.random()*pool.length), j;
+  do { j = Math.floor(Math.random()*pool.length); } while (j===i);
+  g1.p1 = pool[i]; g1.p2 = pool[j]; g1.waiting = false;
+  renderG1();
+}
+
+function g1PlayerCard(p, side) {
+  const info = (g1PlayerInfo||{})[p.name] || {};
+  const pos = info.pos;
+  const posBadge = pos
+    ? `<span style="font-size:9px;padding:1px 6px;border-radius:3px;font-weight:700;letter-spacing:1px;background:${posColors[pos]||'#aaa'}22;color:${posColors[pos]||'#aaa'};border:1px solid ${posColors[pos]||'#aaa'}44">${pos}</span>`
+    : '';
+  const clubStr = info.clubs && info.clubs.length
+    ? `<div style="font-size:9px;color:var(--muted);margin-top:3px;line-height:1.3">${info.clubs.slice(0,2).map(c=>escH(c)).join(' · ')}</div>`
+    : '';
+  const displayName = info.full || p.name;
+  return `
+    <button class="g-duel-btn" onclick="answerG1(${side})">
+      ${posBadge}
+      <div class="g-duel-name" style="margin-top:4px">${escH(displayName)}</div>
+      ${clubStr}
+    </button>`;
+}
+
+function renderG1() {
+  const el = document.getElementById('g1-panel'); if (!el) return;
+  const label = G1_LABELS[g1.mode] || 'Karriere-Tore';
+  const unit  = G1_UNITS[g1.mode]  || 'Tore';
+  const field = g1.mode;
+  const streak = `<div class="g-streak"><span class="g-streak-val">🔥 ${g1.streak}</span><span style="margin-left:auto">Beste: ${g1.best}</span></div>`;
+  if (!g1.waiting) {
+    el.innerHTML = `${streak}
+      <div class="g-prompt">Wer hat mehr ${label}?</div>
+      <div class="g-duel">
+        ${g1PlayerCard(g1.p1, 1)}
+        <div class="g-vs">VS</div>
+        ${g1PlayerCard(g1.p2, 2)}
+      </div>`;
+  } else {
+    const v1 = (g1PlayerInfo[g1.p1.name]||{})[field] || g1.p1[field] || 0;
+    const v2 = (g1PlayerInfo[g1.p2.name]||{})[field] || g1.p2[field] || 0;
+    const tie = v1 === v2;
+    const winner = v1 >= v2 ? g1.p1 : g1.p2;
+    const loser  = v1 >= v2 ? g1.p2 : g1.p1;
+    const vW = Math.max(v1,v2), vL = Math.min(v1,v2);
+    const infoW = g1PlayerInfo[winner.name] || {};
+    const infoL = g1PlayerInfo[loser.name]  || {};
+    const clubsW = infoW.clubs ? infoW.clubs.slice(0,2).join(' · ') : '';
+    const clubsL = infoL.clubs ? infoL.clubs.slice(0,2).join(' · ') : '';
+    el.innerHTML = `${streak}
+      <div class="g-result ${g1.lastOk?'ok':'ng'}">${g1.lastOk?'✓ Richtig!':'✗ Falsch!'}</div>
+      <div class="g-reveal">
+        <strong>${escH(infoW.full||winner.name)}</strong>: ${vW} ${unit}
+        ${clubsW?`<br><span style="font-size:10px;color:var(--muted)">${escH(clubsW)}</span>`:''}
+        <br><span style="color:var(--muted)">${escH(infoL.full||loser.name)}: ${vL} ${unit}</span>
+        ${clubsL?`<br><span style="font-size:10px;color:var(--muted)">${escH(clubsL)}</span>`:''}
+        ${tie ? '<br><em style="color:var(--muted)">Gleichstand — beide richtig</em>' : ''}
+      </div>
+      <button class="g-next" onclick="startGame1()">Nächstes Duell →</button>`;
+  }
+}
+function answerG1(choice) {
+  if (g1.waiting) return;
+  const field = g1.mode;
+  const v1 = (g1PlayerInfo[g1.p1.name]||{})[field] || g1.p1[field] || 0;
+  const v2 = (g1PlayerInfo[g1.p2.name]||{})[field] || g1.p2[field] || 0;
+  const correct = v1 > v2 ? 1 : v1 < v2 ? 2 : 0;
+  const ok = correct===0 || choice===correct;
+  g1.lastOk = ok; g1.waiting = true;
+  if (ok) { g1.streak++; if (g1.streak>g1.best) g1.best=g1.streak; } else { g1.streak=0; }
+  renderG1();
+}
+
+// ── Game 2: Rate das Resultat ─────────────────────────────────────────
+function startGame2() {
+  // Use g.result which is stored as "5:3" string
+  const valid = (DB.games||[]).filter(g => {
+    if (!g.result || !g.home_team_raw || !g.away_team_raw) return false;
+    const parts = g.result.split(':');
+    if (parts.length !== 2) return false;
+    const h = parseInt(parts[0]), a = parseInt(parts[1]);
+    return !isNaN(h) && !isNaN(a) && (h + a) >= 2;
+  });
+  if (!valid.length) return;
+  const game = valid[Math.floor(Math.random()*valid.length)];
+  g2.game = game; g2.waiting = false;
+  const parts = game.result.split(':');
+  const homeScore = parseInt(parts[0]);
+  const awayScore = parseInt(parts[1]);
+  const real = game.result;
+  const set = new Set([real]);
+  let tries = 0;
+  while (set.size < 4 && tries < 100) {
+    tries++;
+    const h = Math.max(0, homeScore + Math.floor(Math.random()*7) - 3);
+    const a = Math.max(0, awayScore + Math.floor(Math.random()*7) - 3);
+    const c = `${h}:${a}`;
+    if (c !== real) set.add(c);
+  }
+  // Sort choices by total goals so options feel natural
+  g2.choices = [...set].sort((a, b) => {
+    const [ah,aa] = a.split(':').map(Number), [bh,ba] = b.split(':').map(Number);
+    return (ah+aa) - (bh+ba) || ah - bh;
+  });
+  g2.answer = real;
+  // Compute a hint: average total goals for matchup between these two teams
+  const matchupGoals = (DB.games||[])
+    .filter(gm => gm.result && ((gm.home_team_raw===game.home_team_raw && gm.away_team_raw===game.away_team_raw) ||
+                                (gm.home_team_raw===game.away_team_raw && gm.away_team_raw===game.home_team_raw)))
+    .map(gm => { const p=gm.result.split(':').map(Number); return p[0]+p[1]; })
+    .filter(n => !isNaN(n));
+  g2.avgGoals = matchupGoals.length > 1
+    ? (matchupGoals.reduce((s,n)=>s+n,0)/matchupGoals.length).toFixed(1)
+    : null;
+  g2.matchupCount = matchupGoals.length;
+  renderG2();
+}
+function renderG2() {
+  const el = document.getElementById('g2-panel'); if (!el) return;
+  const { game, choices, answer, waiting } = g2;
+  const ssn = game.season ? `${game.season}/${String(game.season+1).slice(-2)}` : '—';
+  const streak = `<div class="g-streak"><span class="g-streak-val">🔥 ${g2.streak}</span><span style="margin-left:auto">Beste: ${g2.best}</span></div>`;
+  const hint = g2.avgGoals && g2.matchupCount > 1
+    ? `<div style="font-size:9px;color:var(--muted);text-align:center;margin-top:2px">ø ${g2.avgGoals} Tore in ${g2.matchupCount} Direktvergleichen</div>`
+    : '';
+  const dateStr = game.date ? `${game.date}` : '';
+  if (!waiting) {
+    const btns = choices.map(c => `<button class="g-choice" onclick="answerG2('${c}')" style="font-size:16px;font-weight:700;font-family:'Barlow Condensed',sans-serif;letter-spacing:2px">${c}</button>`).join('');
+    el.innerHTML = `${streak}
+      <div class="g-prompt">Was war das Endresultat?</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:2px">
+        <div style="flex:1;text-align:right;font-size:13px;font-weight:600;color:var(--text)">${escH(game.home_team_raw)}</div>
+        <div style="font-size:10px;color:var(--muted);flex-shrink:0">vs</div>
+        <div style="flex:1;text-align:left;font-size:13px;font-weight:600;color:var(--text)">${escH(game.away_team_raw)}</div>
+      </div>
+      <div class="g-meta">${ssn}${game.league?' · '+escH(game.league):''}${dateStr?' · '+dateStr:''}</div>
+      ${hint}
+      <div class="g-choices" style="margin-top:10px">${btns}</div>`;
+  } else {
+    const [rh,ra] = answer.split(':').map(Number);
+    const diff = Math.abs(rh - ra);
+    const outcome = diff === 0 ? 'Unentschieden' : rh > ra ? `${game.home_team_raw} gewinnt` : `${game.away_team_raw} gewinnt`;
+    el.innerHTML = `${streak}
+      <div class="g-result ${g2.lastOk?'ok':'ng'}">${g2.lastOk?'✓ Richtig!':'✗ Falsch!'}</div>
+      <div class="g-reveal">
+        <div style="font-size:22px;font-family:'Barlow Condensed',sans-serif;font-weight:900;color:var(--text);margin-bottom:4px">${rh} : ${ra}</div>
+        ${escH(game.home_team_raw)} vs ${escH(game.away_team_raw)}<br>
+        <span style="color:var(--muted)">${ssn} · ${outcome}</span>
+      </div>
+      <button class="g-next" onclick="startGame2()">Nächstes Spiel →</button>`;
+  }
+}
+function answerG2(choice) {
+  if (g2.waiting) return;
+  const ok = choice === g2.answer;
+  g2.lastOk=ok; g2.waiting=true;
+  if (ok) { g2.streak++; if (g2.streak>g2.best) g2.best=g2.streak; } else { g2.streak=0; }
+  renderG2();
+}
+
+// ── Game 3: Torjäger-Quiz ─────────────────────────────────────────────
+let g3Eligible = null;
+function buildG3Eligible() {
+  if (g3Eligible) return;
+  const map = {};
+  (DB.goals||[]).forEach(g => {
+    if (!g.scorer_raw || !g.team_scored_raw || !g.season) return;
+    const k = `${g.season}||${g.team_scored_raw}`;
+    if (!map[k]) map[k] = {};
+    map[k][g.scorer_raw] = (map[k][g.scorer_raw]||0) + 1;
+  });
+  g3Eligible = Object.entries(map).map(([k, m]) => {
+    const sep = k.indexOf('||');
+    const season = parseInt(k.slice(0, sep));
+    const team   = k.slice(sep + 2);
+    const sorted = Object.entries(m).sort((a,b) => b[1]-a[1]);
+    return { season, team, topScorer: sorted[0][0], goals: sorted[0][1], others: sorted.slice(1,5).map(x=>x[0]), total: sorted.reduce((s,x)=>s+x[1],0) };
+  }).filter(x => x.goals >= 5 && x.others.length >= 2);
+}
+
+function startGame3() {
+  buildG3Eligible();
+  if (!g3Eligible || !g3Eligible.length) return;
+  const pick = g3Eligible[Math.floor(Math.random()*g3Eligible.length)];
+  g3.pick = pick; g3.answer = pick.topScorer; g3.waiting = false;
+  // Wrong answers: prefer players from same team in other seasons, then random
+  const sameTeamPlayers = g3Eligible
+    .filter(e => e.team === pick.team && e.season !== pick.season)
+    .map(e => e.topScorer);
+  const wrongPool = [...new Set([...pick.others, ...sameTeamPlayers, ...allPlayers.map(p=>p.name)])]
+    .filter(n => n !== pick.topScorer);
+  const wrongs = wrongPool.sort(()=>Math.random()-0.5).slice(0,3);
+  g3.choices = [pick.topScorer, ...wrongs].sort(()=>Math.random()-0.5);
+  renderG3();
+}
+function renderG3() {
+  const el = document.getElementById('g3-panel'); if (!el) return;
+  const { pick, choices, waiting } = g3;
+  const ssn = `${pick.season}/${String(pick.season+1).slice(-2)}`;
+  const streak = `<div class="g-streak"><span class="g-streak-val">🔥 ${g3.streak}</span><span style="margin-left:auto">Beste: ${g3.best}</span></div>`;
+  if (!waiting) {
+    const btns = choices.map(c => {
+      const info = (g1PlayerInfo||{})[c] || {};
+      const displayC = info.full || c;
+      const pos = info.pos;
+      const badge = pos ? `<span style="font-size:8px;display:block;margin-bottom:2px;color:${posColors[pos]||'#aaa'}">${pos}</span>` : '';
+      return `<button class="g-choice" onclick="answerG3(${JSON.stringify(c)})">${badge}${escH(displayC)}</button>`;
+    }).join('');
+    el.innerHTML = `${streak}
+      <div class="g-prompt">Wer war Topscorer der Saison?</div>
+      <div class="g-meta-big">${escH(pick.team)}</div>
+      <div class="g-meta">Saison ${ssn} · ${pick.total} Tore total</div>
+      <div class="g-choices">${btns}</div>`;
+  } else {
+    const info = (g1PlayerInfo||{})[g3.answer] || {};
+    const displayName = info.full || g3.answer;
+    const clubs = info.clubs ? info.clubs.slice(0,2).join(' · ') : '';
+    const runnerUp = pick.others[0];
+    const ruInfo = runnerUp ? ((g1PlayerInfo||{})[runnerUp]||{}) : null;
+    el.innerHTML = `${streak}
+      <div class="g-result ${g3.lastOk?'ok':'ng'}">${g3.lastOk?'✓ Richtig!':'✗ Falsch!'}</div>
+      <div class="g-reveal">
+        <strong>${escH(displayName)}</strong> — ${pick.goals} Tore<br>
+        ${clubs ? `<span style="font-size:10px;color:var(--muted)">${escH(clubs)}</span><br>` : ''}
+        <span style="color:var(--muted)">${escH(pick.team)}, ${ssn}</span>
+        ${ruInfo ? `<br><span style="font-size:10px;color:var(--muted)">2. Platz: ${escH(ruInfo.full||runnerUp)}</span>` : ''}
+      </div>
+      <button class="g-next" onclick="startGame3()">Nächste Frage →</button>`;
+  }
+}
+function answerG3(choice) {
+  if (g3.waiting) return;
+  const ok = choice === g3.answer;
+  g3.lastOk=ok; g3.waiting=true;
+  if (ok) { g3.streak++; if (g3.streak>g3.best) g3.best=g3.streak; } else { g3.streak=0; }
+  renderG3();
+}
+
+function escH(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 function init() {
   buildSeasonPills();
   buildAllPlayers();
@@ -873,6 +1401,7 @@ function init() {
     o.textContent = c.name + (c.teams.length > 1 ? ` (${c.teams.length} Teams)` : '');
     clubSel.appendChild(o);
   });
+  initHomePage();
 }
 
 function onClubChange() {
@@ -1058,6 +1587,19 @@ function renderDashboard() {
   const avgConceded = teamGames.length ? (concededGoals.length / teamGames.length).toFixed(2) : 0;
   const winPct = teamGames.length ? Math.round(wins / teamGames.length * 100) : 0;
 
+  // Playoff stats
+  const poPhases = new Set(['Viertelfinal','Halbfinal','Final','Playoff','Superfinal']);
+  const poGames = teamGames.filter(g => poPhases.has(g.phase));
+  let poWins=0, poLosses=0;
+  poGames.forEach(g => {
+    const [h,a] = (g.result||'').split(':').map(Number);
+    if (isNaN(h)||isNaN(a)) return;
+    const isHome = selectedTeamIds.has(g.home_team_id);
+    const myG = isHome ? h : a, oppG = isHome ? a : h;
+    if (myG > oppG) poWins++; else if (myG < oppG) poLosses++;
+  });
+  const poScored = filterGoals(null,'scored').filter(g => poPhases.has((DB.games.find(gm=>gm.game_id===g.game_id)||{}).phase));
+
   const allTime = selectedSeason === 'all';
 
   const content = document.getElementById('mainContent');
@@ -1102,6 +1644,15 @@ function renderDashboard() {
       </div>
     </div>
 
+    ${poGames.length ? `
+    <div style="margin-bottom:4px;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#9b59b6;font-weight:700">🏆 Playoffs</div>
+    <div class="kpi-row" style="margin-bottom:24px">
+      <div class="kpi" style="--accent-color:#9b59b6"><div class="kpi-val">${poGames.length}</div><div class="kpi-label">PO-Spiele</div></div>
+      <div class="kpi" style="--accent-color:var(--score)"><div class="kpi-val">${poWins}</div><div class="kpi-label">PO-Siege</div></div>
+      <div class="kpi" style="--accent-color:var(--concede)"><div class="kpi-val">${poLosses}</div><div class="kpi-label">PO-Niederlagen</div></div>
+      <div class="kpi" style="--accent-color:#9b59b6"><div class="kpi-val">${poGames.length ? Math.round(poWins/poGames.length*100)+'%' : '—'}</div><div class="kpi-label">PO-Winrate</div></div>
+    </div>` : ''}
+
     <!-- ── SECTION: Special Teams (always) ── -->
     <div class="sec-hdr" id="sh-pen" onclick="toggleSec('pen')">
       <span>Special Teams — Strafen · Powerplay · Boxplay</span><span class="sec-arrow">▾</span>
@@ -1109,6 +1660,23 @@ function renderDashboard() {
     <div class="sec-body" id="sb-pen">
       <div class="card" id="cardPenalties">
         <div id="penaltiesContent"><div style="color:var(--muted);font-size:12px">Wird geladen…</div></div>
+      </div>
+    </div>
+
+    <!-- ── SECTION: Rekord-Spieler (always) ── -->
+    <div class="sec-hdr" id="sh-records" onclick="toggleSec('records')">
+      <span>Rekord-Spieler</span><span class="sec-arrow">▾</span>
+    </div>
+    <div class="sec-body" id="sb-records">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent)"></span>Meiste Spiele (Einsätze)</div>
+          <div id="recordByGames"></div>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Meiste Punkte (Gesamt)</div>
+          <div id="recordByPoints"></div>
+        </div>
       </div>
     </div>
 
@@ -1286,6 +1854,7 @@ function renderDashboard() {
   `;
 
   // Always-visible sections
+  renderRecordPlayers(scoredGoals);
   renderTopScorers(scoredGoals, concededGoals);
   renderOpponentChart(scoredGoals, concededGoals);
   renderHomeAway(teamGames, scoredGoals, concededGoals);
@@ -1319,7 +1888,7 @@ function renderDashboard() {
   }
 
   // Apply collapsible states AFTER all charts are rendered
-  const secDefaults = { pen: true, scorer: true, stats: true };
+  const secDefaults = { records: true, pen: true, scorer: true, stats: true };
   if (!allTime) { secDefaults.tor = true; secDefaults.verlauf = false; }
   initSecs(secDefaults);
 }
@@ -1881,7 +2450,7 @@ function renderTopScorers(scored, conceded) {
     const barVal = byPts ? p.pts : p.goals;
     const goalCell = byPts ? `<span class="scorer-assists">${p.goals}</span>` : '';
     return `
-    <div class="scorer-row" onclick="openPlayerModal('${safeN}', scoredGoalsGlobal, concededGoalsGlobal, teamGamesGlobal)" title="Klicken für Spielerprofil">
+    <div class="scorer-row" onclick="navigateToPlayer('${safeN}')" title="Klicken für Spielerprofil">
       <span class="scorer-rank">${i+1}</span>
       <span class="scorer-name">${escapedN}</span>
       <div class="scorer-bar-wrap">
@@ -1895,6 +2464,99 @@ function renderTopScorers(scored, conceded) {
   }).join('');
 
   document.getElementById('topScorers').innerHTML = rows || '<div class="no-data">Keine Daten</div>';
+}
+
+
+// ─────────────────────────────────────────────
+// Record players
+// ─────────────────────────────────────────────
+function renderRecordPlayers(scored) {
+  const clubGameIds = new Set(teamGamesGlobal.map(g => g.game_id));
+  const meta = DB.player_meta || {};
+
+  // Collect all players who scored/assisted for the club
+  const playerNames = new Set();
+  scored.forEach(g => {
+    if (g.scorer_raw) playerNames.add(g.scorer_raw);
+    if (g.assist_raw) playerNames.add(g.assist_raw);
+  });
+
+  // For each player: club GP = gids that are in club's games
+  const byGames = [...playerNames].map(name => {
+    const m = meta[name];
+    const clubGP = m?.gids ? m.gids.filter(gid => clubGameIds.has(gid)).length : 0;
+    const fullName = m?.full || name;
+    return { name, fullName, clubGP, totalGP: m?.gp || 0 };
+  }).filter(p => p.clubGP > 0).sort((a, b) => b.clubGP - a.clubGP).slice(0, 15);
+
+  // Points per player for the club (from scored goals)
+  const goalMap = {}, assistMap = {};
+  scored.forEach(g => {
+    if (g.scorer_raw) goalMap[g.scorer_raw] = (goalMap[g.scorer_raw] || 0) + 1;
+    if (g.assist_raw) assistMap[g.assist_raw] = (assistMap[g.assist_raw] || 0) + 1;
+  });
+  const byPoints = [...playerNames].map(name => {
+    const g = goalMap[name] || 0, a = assistMap[name] || 0;
+    const fullName = (meta[name]?.full) || name;
+    return { name, fullName, goals: g, assists: a, pts: g + a };
+  }).sort((a, b) => b.pts - a.pts).slice(0, 15);
+
+  const makeRow = (p, i, val, valLabel, sub, subColor) => {
+    const safeN = p.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    const dispName = p.fullName.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    const maxVal = val;
+    return `
+    <div class="scorer-row" onclick="navigateToPlayer('${safeN}')" title="Zum Spielerprofil">
+      <span class="scorer-rank">${i+1}</span>
+      <span class="scorer-name">${dispName}</span>
+      <div class="scorer-bar-wrap">
+        <div class="scorer-bar" style="width:100%;background:transparent">
+          <div style="height:100%;width:100%;background:var(--accent)22;border-radius:2px;position:relative">
+          </div>
+        </div>
+      </div>
+      <span class="scorer-goals" style="color:var(--accent);min-width:32px;text-align:right">${valLabel}</span>
+      <span class="scorer-assists" style="color:var(--muted);font-size:10px">${sub}</span>
+      <span style="font-size:11px;color:var(--muted);margin-left:2px;opacity:0.6">›</span>
+    </div>`;
+  };
+
+  const maxGP = byGames[0]?.clubGP || 1;
+  const gpRows = byGames.map((p, i) => {
+    const safeN = p.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    const dispName = p.fullName.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    return `
+    <div class="scorer-row" onclick="navigateToPlayer('${safeN}')" title="Zum Spielerprofil">
+      <span class="scorer-rank">${i+1}</span>
+      <span class="scorer-name">${dispName}</span>
+      <div class="scorer-bar-wrap">
+        <div class="scorer-bar" style="width:${(p.clubGP/maxGP*100).toFixed(1)}%;background:var(--accent)"></div>
+      </div>
+      <span class="scorer-goals" style="color:var(--accent)">${p.clubGP}</span>
+      <span class="scorer-assists" style="color:var(--muted);font-size:10px">Sp.</span>
+      <span style="font-size:11px;color:var(--muted);margin-left:2px;opacity:0.6">›</span>
+    </div>`;
+  }).join('');
+
+  const maxPts = byPoints[0]?.pts || 1;
+  const ptRows = byPoints.map((p, i) => {
+    const safeN = p.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    const dispName = p.fullName.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    return `
+    <div class="scorer-row" onclick="navigateToPlayer('${safeN}')" title="Zum Spielerprofil">
+      <span class="scorer-rank">${i+1}</span>
+      <span class="scorer-name">${dispName}</span>
+      <div class="scorer-bar-wrap">
+        <div class="scorer-bar" style="width:${(p.pts/maxPts*100).toFixed(1)}%;background:var(--accent3)"></div>
+      </div>
+      <span class="scorer-goals" style="color:var(--accent3)">${p.pts}</span>
+      <span class="scorer-assists" style="color:var(--muted);font-size:10px">${p.goals}G ${p.assists}A</span>
+      <span style="font-size:11px;color:var(--muted);margin-left:2px;opacity:0.6">›</span>
+    </div>`;
+  }).join('');
+
+  document.getElementById('recordByGames').innerHTML = gpRows || '<div class="no-data">Keine Lineup-Daten</div>';
+  document.getElementById('recordByPoints').innerHTML = ptRows || '<div class="no-data">Keine Daten</div>';
 }
 
 
@@ -3603,8 +4265,13 @@ function openPlayerModal(playerName, scored, conceded, games) {
   const totalGoals   = pGoals.length;
   const totalAssists = pAssists.length;
   const totalPoints  = totalGoals + totalAssists;
-  const gamesScored  = new Set(pGoals.map(g => g.game_id)).size;
-  const gamesPlayed  = new Set([...pGoals, ...pAssists].map(g => g.game_id)).size;
+  const pPenalties  = (DB.penalties||[]).filter(p => p.player_raw === playerName);
+  const gamesScored = new Set(pGoals.map(g => g.game_id)).size;
+  const gamesPlayed = new Set([
+    ...pGoals.map(g => g.game_id),
+    ...pAssists.map(g => g.game_id),
+    ...pPenalties.map(p => p.game_id)
+  ]).size;
   const gpg = gamesPlayed ? (totalGoals / gamesPlayed).toFixed(2) : 0;
 
   // ── By period ──────────────────────────────────────────────────────────
@@ -3801,10 +4468,11 @@ let playerSelectedSeason = 'all';
 let allPlayers = [];
 
 function showPage(page) {
-  ['team','player','league'].forEach(p => {
-    document.getElementById('tab'+p.charAt(0).toUpperCase()+p.slice(1))
-      .classList.toggle('active', p === page);
+  ['home','team','player','league'].forEach(p => {
+    const tab = document.getElementById('tab'+p.charAt(0).toUpperCase()+p.slice(1));
+    if (tab) tab.classList.toggle('active', p === page);
   });
+  document.getElementById('homePage').style.display        = page==='home'   ? '' : 'none';
   document.getElementById('teamSelectorBar').style.display = page==='team'   ? '' : 'none';
   document.getElementById('mainContent').style.display     = page==='team'   ? '' : 'none';
   document.getElementById('playerPage').style.display      = page==='player' ? '' : 'none';
@@ -3878,15 +4546,29 @@ function selectPlayer(name) {
   renderPlayerPage(name);
 }
 
+// Navigate from any page to a player's detail view
+function navigateToPlayer(name) {
+  showPage('player');
+  selectedPlayer = name;
+  playerSelectedSeason = 'all';
+  const inp = document.getElementById('playerSearchInput');
+  if (inp) inp.value = name;
+  document.getElementById('playerAutocomplete')?.classList.remove('open');
+  buildPlayerSeasonPills();
+  renderPlayerPage(name);
+}
+
 function getPlayerData(name) {
-  let goals   = (DB.goals || []).filter(g => g.scorer_raw === name);
-  let assists = (DB.goals || []).filter(g => g.assist_raw === name);
+  let goals    = (DB.goals     || []).filter(g => g.scorer_raw === name);
+  let assists  = (DB.goals     || []).filter(g => g.assist_raw === name);
+  let penalties = (DB.penalties || []).filter(p => p.player_raw === name);
   if (playerSelectedSeason !== 'all') {
     const s = parseInt(playerSelectedSeason);
-    goals   = goals.filter(g => g.season === s);
-    assists = assists.filter(g => g.season === s);
+    goals    = goals.filter(g => g.season === s);
+    assists  = assists.filter(g => g.season === s);
+    penalties = penalties.filter(p => p.season === s);
   }
-  return { goals, assists };
+  return { goals, assists, penalties };
 }
 
 function pBar(label, cnt, maxCnt, color) {
@@ -3898,12 +4580,113 @@ function pBar(label, cnt, maxCnt, color) {
   </div>`;
 }
 
+function renderPlayerClubGames(name, meta, gameById) {
+  const container = document.getElementById('pcClubGames');
+  if (!container) return;
+
+  // Step 1: map game_id → team the player scored for (ground truth)
+  const scoringTeamByGame = {};
+  (DB.goals || []).forEach(function(g) {
+    if (g.scorer_raw === name || g.assist_raw === name) {
+      scoringTeamByGame[g.game_id] = g.team_scored_raw;
+    }
+  });
+
+  // Step 2: all team names the player has ever scored for (used to infer non-scoring games)
+  const knownTeams = new Set(Object.values(scoringTeamByGame));
+
+  // Step 3: pick gids source — lineup-based if available, else scoring games
+  const gidsAll = (meta && meta.gids && meta.gids.length) ? meta.gids : Object.keys(scoringTeamByGame);
+  const season = playerSelectedSeason === 'all' ? null : parseInt(playerSelectedSeason);
+  const gids = season
+    ? gidsAll.filter(function(gid) { var gm = gameById[gid]; return gm && gm.season === season; })
+    : gidsAll;
+
+  // Step 4: build per-team stats (gp, first/last game date, goals, assists)
+  var teamStats = {};
+  // Also gather goals/assists per team from scoring events
+  var teamGoals = {}, teamAssists = {};
+  (DB.goals || []).forEach(function(g) {
+    if (g.scorer_raw === name && g.team_scored_raw) {
+      teamGoals[g.team_scored_raw] = (teamGoals[g.team_scored_raw] || 0) + 1;
+    }
+    if (g.assist_raw === name && g.team_scored_raw) {
+      teamAssists[g.team_scored_raw] = (teamAssists[g.team_scored_raw] || 0) + 1;
+    }
+  });
+
+  gids.forEach(function(gid) {
+    var gm = gameById[gid];
+    if (!gm) return;
+    var team = scoringTeamByGame[gid];
+    if (!team) {
+      var homeKnown = knownTeams.has(gm.home_team_raw);
+      var awayKnown = knownTeams.has(gm.away_team_raw);
+      if (homeKnown && !awayKnown) team = gm.home_team_raw;
+      else if (awayKnown && !homeKnown) team = gm.away_team_raw;
+    }
+    if (!team) return;
+    if (!teamStats[team]) teamStats[team] = { gp:0, firstDate:null, lastDate:null, firstOpp:null, lastOpp:null };
+    var s = teamStats[team];
+    s.gp++;
+    var date = gm.date || '';
+    var isHome = team === gm.home_team_raw;
+    var opp = isHome ? gm.away_team_raw : gm.home_team_raw;
+    if (!s.firstDate || date < s.firstDate) { s.firstDate = date; s.firstOpp = opp; }
+    if (!s.lastDate  || date > s.lastDate)  { s.lastDate  = date; s.lastOpp  = opp; }
+  });
+
+  var sorted = Object.entries(teamStats).sort(function(a, b) { return b[1].gp - a[1].gp; });
+  if (!sorted.length) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:4px 0">Keine Daten</div>';
+    return;
+  }
+
+  var maxVal = sorted[0][1].gp;
+  container.innerHTML = sorted.map(function(entry) {
+    var team = entry[0], s = entry[1];
+    var safeTeam = team.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    var pct = (s.gp / maxVal * 100).toFixed(1);
+    var g = teamGoals[team] || 0, a = teamAssists[team] || 0;
+    var scoring = (g || a) ? ('<span style="color:var(--score)">' + g + 'G</span> <span style="color:var(--accent3)">' + a + 'A</span>') : '';
+    var firstStr = s.firstDate ? s.firstDate.slice(0,7) + (s.firstOpp ? ' vs ' + s.firstOpp.replace(/&/g,'&amp;') : '') : '';
+    var lastStr  = s.lastDate  ? s.lastDate.slice(0,7)  + (s.lastOpp  ? ' vs ' + s.lastOpp.replace(/&/g,'&amp;')  : '') : '';
+    var sameDate = s.firstDate === s.lastDate;
+    return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">'
+      + '<div style="display:flex;align-items:center;gap:8px">'
+      +   '<span style="flex:1;font-size:13px;font-weight:600;color:var(--text)">' + safeTeam + '</span>'
+      +   (scoring ? '<span style="font-size:11px">' + scoring + '</span>' : '')
+      +   '<span style="font-size:15px;font-weight:700;color:var(--accent);min-width:28px;text-align:right">' + s.gp + '</span>'
+      +   '<span style="font-size:10px;color:var(--muted)">Sp.</span>'
+      + '</div>'
+      + '<div style="background:var(--surface2);border-radius:2px;height:4px;overflow:hidden;margin:5px 0">'
+      +   '<div style="width:' + pct + '%;height:100%;background:var(--accent);border-radius:2px"></div>'
+      + '</div>'
+      + (!sameDate && firstStr && lastStr
+          ? '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted)">'
+            + '<span title="Erstes Spiel">⬤ ' + firstStr + '</span>'
+            + '<span title="Letztes Spiel">◼ ' + lastStr + '</span>'
+            + '</div>'
+          : (firstStr ? '<div style="font-size:10px;color:var(--muted)">⬤ ' + firstStr + '</div>' : ''))
+      + '</div>';
+  }).join('');
+}
+
 function renderPlayerPage(name) {
-  const { goals, assists } = getPlayerData(name);
+  const { goals, assists, penalties } = getPlayerData(name);
 
   // ── Core stats ─────────────────────────────────────────────────────
-  const allGameIds = new Set([...goals.map(g => g.game_id), ...assists.map(g => g.game_id)]);
-  const gp  = allGameIds.size;
+  // Use exact games-played from lineups when available, fall back to event-based count
+  const metaEarly = (DB.player_meta || {})[name];
+  const gpLineup = (metaEarly?.gp && playerSelectedSeason === 'all') ? metaEarly.gp
+    : (metaEarly?.gp_s && playerSelectedSeason !== 'all') ? (metaEarly.gp_s[String(playerSelectedSeason)] || 0)
+    : null;
+  const gpEvents = new Set([
+    ...goals.map(g => g.game_id),
+    ...assists.map(g => g.game_id),
+    ...penalties.map(p => p.game_id)
+  ]).size;
+  const gp = gpLineup !== null ? gpLineup : gpEvents;
   const pts = goals.length + assists.length;
   const gpg = gp ? (goals.length / gp).toFixed(2) : '—';
   const apg = gp ? (assists.length / gp).toFixed(2) : '—';
@@ -3913,24 +4696,46 @@ function renderPlayerPage(name) {
   goals.forEach(g => { goalsByGame[g.game_id] = (goalsByGame[g.game_id] || 0) + 1; });
   const hatTricks = Object.values(goalsByGame).filter(n => n >= 3).length;
 
-  const allSeasons = [...new Set([...goals, ...assists].map(g => g.season).filter(Boolean))].sort();
+  const metaSeasons = Object.keys((DB.player_meta || {})[name]?.gp_s || {}).map(Number);
+  const allSeasons = [...new Set([...[...goals, ...assists].map(g => g.season).filter(Boolean), ...metaSeasons])].sort();
+  // Playoff scoring stats
+  const playoffPhases = new Set(['Viertelfinal','Halbfinal','Final','Playoff','Superfinal']);
+  const playoffGoalIds = new Set((DB.games||[]).filter(g => playoffPhases.has(g.phase)).map(g => g.game_id));
+  const playoffGoals   = goals.filter(g => playoffGoalIds.has(g.game_id));
+  const playoffAssists = assists.filter(g => playoffGoalIds.has(g.game_id));
   const seasonGoals = goals.reduce((m, g) => { if (g.season) m[g.season] = (m[g.season]||0)+1; return m; }, {});
   const bestSeasonEntry = Object.entries(seasonGoals).sort((a,b) => b[1]-a[1])[0];
   const bestSeason = bestSeasonEntry ? `${bestSeasonEntry[0]}/${String(parseInt(bestSeasonEntry[0])+1).slice(-2)} (${bestSeasonEntry[1]}G)` : '—';
 
+  // ── Position badge from player_meta ────────────────────────────────
+  const meta = (DB.player_meta || {})[name];
+  const displayName = meta?.full || name;
+  const posColors = { 'Stürmer': '#00e5ff', 'Verteidiger': '#ffd32a', 'Goalie': '#2ecc71' };
+  const pos = meta?.pos;
+  const posBadge = pos
+    ? `<span style="display:inline-block;margin-left:10px;padding:2px 9px;border-radius:4px;
+                font-size:10px;font-weight:700;letter-spacing:1px;vertical-align:middle;
+                background:${posColors[pos]||'#aaa'}22;color:${posColors[pos]||'#aaa'};
+                border:1px solid ${posColors[pos]||'#aaa'}55">${pos}</span>`
+    : '';
+
   // ── Avatar initials ─────────────────────────────────────────────────
-  const parts = name.trim().split(/\s+/);
+  const parts = displayName.trim().split(/\s+/);
   const initials = parts.length >= 2
     ? (parts[0][0] + parts[parts.length-1][0]).toUpperCase()
-    : name.slice(0,2).toUpperCase();
+    : displayName.slice(0,2).toUpperCase();
 
   // ── Render skeleton ─────────────────────────────────────────────────
   document.getElementById('playerContent').innerHTML = `
     <div class="player-hero">
       <div class="player-avatar">${initials}</div>
       <div>
-        <div class="player-hero-name">${name}</div>
-        <div class="player-hero-sub">L-UPL · ${allSeasons.length} Saison${allSeasons.length !== 1 ? 'en' : ''} · Beste Saison: ${bestSeason}</div>
+        <div class="player-hero-name">${displayName}${posBadge}</div>
+        <div class="player-hero-sub">
+          ${allSeasons.length} Saison${allSeasons.length !== 1 ? 'en' : ''}
+          · ${gp} Spiele
+          · Beste Saison: ${bestSeason}
+        </div>
       </div>
     </div>
 
@@ -3960,6 +4765,23 @@ function renderPlayerPage(name) {
         <div class="kpi-val">${hatTricks}</div><div class="kpi-label">Hat-Tricks</div>
       </div>
     </div>
+
+    ${playoffGoals.length || playoffAssists.length ? `
+    <div style="margin-bottom:4px;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#9b59b6;font-weight:700">🏆 Playoffs</div>
+    <div class="kpi-row" style="margin-bottom:24px">
+      <div class="kpi" style="--accent-color:#9b59b6">
+        <div class="kpi-val">${playoffGoals.length}</div><div class="kpi-label">PO-Tore</div>
+      </div>
+      <div class="kpi" style="--accent-color:#9b59b6">
+        <div class="kpi-val">${playoffAssists.length}</div><div class="kpi-label">PO-Assists</div>
+      </div>
+      <div class="kpi" style="--accent-color:#9b59b6">
+        <div class="kpi-val">${playoffGoals.length + playoffAssists.length}</div><div class="kpi-label">PO-Punkte</div>
+      </div>
+      <div class="kpi" style="--accent-color:#9b59b6">
+        <div class="kpi-val">${new Set(playoffGoals.map(g=>g.game_id)).size}</div><div class="kpi-label">PO-Spiele (G)</div>
+      </div>
+    </div>` : ''}
 
     <div class="grid-2">
       <div class="card">
@@ -3992,6 +4814,11 @@ function renderPlayerPage(name) {
         <div class="card-title"><span class="dot" style="background:var(--accent3)"></span>Assist-Netzwerk</div>
         <div id="pcAssistNet"></div>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="dot" style="background:var(--accent)"></span>Spiele pro Verein</div>
+      <div id="pcClubGames"></div>
     </div>
 
     <div class="card">
@@ -4146,36 +4973,91 @@ function renderPlayerPage(name) {
     ${!givers.length && !recips.length ? '<div style="color:var(--muted);font-size:12px;padding:8px 0">Keine Daten</div>' : ''}
   `;
 
+  // ── Build game lookup (shared by Club Games + Game Log) ─────────────
+  const gameById = {};
+  (DB.games || []).forEach(g => { gameById[g.game_id] = g; });
+
+  // ── Spiele pro Verein ────────────────────────────────────────────────
+  renderPlayerClubGames(name, meta, gameById);
+
   // ── Game Log ────────────────────────────────────────────────────────
+
   const gameMap = {};
-  const ensureGame = (g) => {
-    if (!gameMap[g.game_id]) {
-      const gm = (DB.games || []).find(x => x.game_id === g.game_id);
-      gameMap[g.game_id] = {
-        date: g.date, season: g.season,
-        home: g.home_team_raw, away: g.away_team_raw,
-        result: gm ? gm.result : null,
-        teamScoredId: g.team_scored_id, homeId: g.home_team_id,
-        goals: [], assists: []
-      };
+  const ensureGame = (gameId, fallbackGoalRow) => {
+    if (!gameMap[gameId]) {
+      const gm = gameById[gameId];
+      if (gm) {
+        gameMap[gameId] = {
+          date: gm.date, season: gm.season,
+          home: gm.home_team_raw, away: gm.away_team_raw,
+          result: gm.result,
+          homeId: gm.home_team_id,
+          phase: gm.phase || 'Qualifikation',
+          teamScoredId: null,
+          goals: [], assists: []
+        };
+      } else if (fallbackGoalRow) {
+        gameMap[gameId] = {
+          date: fallbackGoalRow.date, season: fallbackGoalRow.season,
+          home: fallbackGoalRow.home_team_raw, away: fallbackGoalRow.away_team_raw,
+          result: null,
+          phase: 'Qualifikation',
+          teamScoredId: fallbackGoalRow.team_scored_id, homeId: fallbackGoalRow.home_team_id,
+          goals: [], assists: []
+        };
+      }
     }
   };
-  goals.forEach(g => { ensureGame(g); gameMap[g.game_id].goals.push(g.minute || ''); });
-  assists.forEach(g => { ensureGame(g); gameMap[g.game_id].assists.push(g.minute || ''); });
+
+  // Seed all lineup games first (so games without scoring events appear too)
+  const metaForLog = (DB.player_meta || {})[name];
+  const gidsAll = metaForLog?.gids || [];
+  const gidsFiltered = playerSelectedSeason === 'all'
+    ? gidsAll
+    : gidsAll.filter(gid => { const gm = gameById[gid]; return gm && gm.season === parseInt(playerSelectedSeason); });
+  gidsFiltered.forEach(gid => ensureGame(gid, null));
+
+  // Overlay scoring events
+  goals.forEach(g => {
+    ensureGame(g.game_id, g);
+    if (gameMap[g.game_id]) {
+      if (!gameMap[g.game_id].teamScoredId) gameMap[g.game_id].teamScoredId = g.team_scored_id;
+      gameMap[g.game_id].goals.push(g.minute || '');
+    }
+  });
+  assists.forEach(g => {
+    ensureGame(g.game_id, g);
+    if (gameMap[g.game_id]) {
+      if (!gameMap[g.game_id].teamScoredId) gameMap[g.game_id].teamScoredId = g.team_scored_id;
+      gameMap[g.game_id].assists.push(g.minute || '');
+    }
+  });
 
   const logRows = Object.values(gameMap)
     .sort((a,b) => (b.date||'').localeCompare(a.date||''))
     .map(gm => {
-      const isHome = gm.teamScoredId === gm.homeId;
-      const opp    = isHome ? gm.away : gm.home;
-      const ha     = isHome ? '<span style="color:var(--score);font-size:10px">H</span>' : '<span style="color:var(--accent);font-size:10px">A</span>';
+      // For scoring games we know the player's team; for lineup-only games show both teams
+      let opp, ha;
+      if (gm.teamScoredId) {
+        const isHome = gm.teamScoredId === gm.homeId;
+        opp = isHome ? gm.away : gm.home;
+        ha  = isHome ? '<span style="color:var(--score);font-size:10px">H</span>' : '<span style="color:var(--accent);font-size:10px">A</span>';
+      } else {
+        opp = `${gm.home||'?'} – ${gm.away||'?'}`;
+        ha  = '';
+      }
       const g      = gm.goals.length, a = gm.assists.length;
       const season = gm.season ? `${gm.season}/${String(gm.season+1).slice(-2)}` : '—';
       const mins   = [...gm.goals.map(m=>`<span style="color:var(--score)">${m}</span>`),
                       ...gm.assists.map(m=>`<span style="color:var(--accent3)">${m}(A)</span>`)].join(' ');
+      const phaseColors = { 'Viertelfinal':'#9b59b6', 'Halbfinal':'#e67e22', 'Playoff':'#e67e22', 'Final':'#e74c3c', 'Superfinal':'#e74c3c' };
+      const ph = gm.phase && gm.phase !== 'Qualifikation' ? gm.phase : '';
+      const phaseBadge = ph
+        ? `<span style="font-size:8px;padding:1px 5px;border-radius:3px;font-weight:700;letter-spacing:0.5px;background:${phaseColors[ph]||'#e67e22'}22;color:${phaseColors[ph]||'#e67e22'};border:1px solid ${phaseColors[ph]||'#e67e22'}55;white-space:nowrap">${ph}</span>`
+        : '';
       return `<tr>
         <td style="color:var(--muted);white-space:nowrap">${gm.date||'—'}</td>
-        <td>${ha} ${opp||'—'}</td>
+        <td>${ha} ${opp||'—'}${phaseBadge ? ' '+phaseBadge : ''}</td>
         <td style="color:var(--muted)">${gm.result||'—'}</td>
         <td class="${g>0?'gl-g':'gl-none'}">${g>0?g:'—'}</td>
         <td class="${a>0?'gl-a':'gl-none'}">${a>0?a:'—'}</td>
@@ -4187,7 +5069,7 @@ function renderPlayerPage(name) {
   document.getElementById('pcGameLog').innerHTML = `
     <table class="game-log">
       <thead><tr>
-        <th>Datum</th><th>Gegner</th><th>Resultat</th>
+        <th>Datum</th><th>Gegner / Phase</th><th>Resultat</th>
         <th style="color:var(--score)">G</th>
         <th style="color:var(--accent3)">A</th>
         <th>Minuten</th><th>Saison</th>
