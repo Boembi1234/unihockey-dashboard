@@ -37,11 +37,17 @@ TARGET_LEAGUES = [
     {"league":  1, "game_class": 11, "label": "Herren NLA",
      "seasons": [2021,2020,2019,2018,2017,2016,2015,2014,2013,
                  2006,2005,2004,2003,2002,2001,2000,1999,1998,1997]},
-    {"league": 10, "game_class": 11, "label": "Herren SML",
+    {"league": 10, "game_class": 11, "label": "Herren NLA",
      "seasons": [2012,2011,2010,2009,2008,2007]},
-    # {"league":  3, "game_class": 11, "label": "Herren 1. Liga"},
-    # {"league": 24, "game_class": 21, "label": "Damen L-UPL"},
-    # {"league":  2, "game_class": 11, "label": "Herren NLB"},
+    {"league":  2, "game_class": 11, "label": "Herren NLB",
+     "seasons": [2025,2024,2023,2022,2021,2020,2019,2018,2017,2016,
+                 2015,2014,2013,2012,2011,2010,2009,2008,2007,2006,
+                 2005,2004,2003,2002,2001,2000,1999,1998,1997]},
+    # Grossfeld only (game_class=11); two regional groups; seasons 2019–2025
+    {"league": 3, "game_class": 11, "group": "Gruppe 1", "label": "Herren 1. Liga",
+     "seasons": [2025, 2024, 2023, 2022, 2021, 2020, 2019]},
+    {"league": 3, "game_class": 11, "group": "Gruppe 2", "label": "Herren 1. Liga",
+     "seasons": [2025, 2024, 2023, 2022, 2021, 2020, 2019]},
 ]
 
 SEASONS = []  # per-league seasons defined above
@@ -52,6 +58,7 @@ SEASONS = []  # per-league seasons defined above
 
 LEAGUE_MAP = {
     "Herren L-UPL":                  "Herren NLA",
+    "Herren SML":                    "Herren NLA",
     "Herren Aktive KF 3. Liga":      "Herren 3. Liga",
     "Mobiliar Unihockey Cup Männer": "Mobiliar Unihockey Cup Herren",
 }
@@ -129,6 +136,11 @@ CREATE TABLE IF NOT EXISTS name_map (
     abbrev_name TEXT PRIMARY KEY,
     full_name   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS player_statistics_cache (
+    pid        INTEGER PRIMARY KEY,
+    stats_json TEXT    NOT NULL,
+    fetched_at TEXT    NOT NULL
+);
 """
 
 # ══════════════════════════════════════════════════════════════════════
@@ -162,6 +174,34 @@ def cell_text(cell, index=0):
     if isinstance(t, list):
         return t[index] if index < len(t) else (t[0] if t else "")
     return t or ""
+
+def fetch_player_statistics(pid):
+    """Fetch official per-season statistics for a player (all leagues)."""
+    raw = api_get(f"players/{pid}/statistics")
+    if not raw:
+        return []
+    rows = []
+    for region in unwrap(raw).get("regions", []):
+        for row in region.get("rows", []):
+            cells = row.get("cells", [])
+            if len(cells) < 7:
+                continue
+            games_str = cell_text(cells[3])
+            try:
+                games = int(games_str)
+            except (ValueError, TypeError):
+                continue  # skip header rows
+            rows.append({
+                "season":  cell_text(cells[0]),
+                "liga":    cell_text(cells[1]),
+                "verein":  cell_text(cells[2]),
+                "games":   games,
+                "goals":   int(cell_text(cells[4]) or 0),
+                "assists": int(cell_text(cells[5]) or 0),
+                "points":  int(cell_text(cells[6]) or 0),
+            })
+    return rows
+
 
 _RELATIVE_DATES = {
     "heute":    0,   # today
@@ -226,19 +266,26 @@ def upsert_team(conn, team_id, name):
 # FETCH GAME ROWS  ← KEY FIX: correct params, no "mode" needed
 # ══════════════════════════════════════════════════════════════════════
 
-def fetch_game_rows(league, game_class, season):
+def fetch_game_rows(league, game_class, season, group=None):
     """
-    GET /api/games?mode=list&league=24&game_class=11&season=2025
+    GET /api/games?mode=list&league=24&game_class=11&season=2025[&group=Gruppe+1]
     The API navigates rounds via slider.prev/next using a 'round' param.
     We start at the latest round, then follow 'prev' to collect all rounds.
+
+    Returns (game_rows, game_region):
+      game_rows   — {gid: row}
+      game_region — {gid: region_title}  e.g. "Gruppe 1" / "Gruppe 2"
     """
-    game_rows  = {}
+    game_rows   = {}
+    game_region = {}  # gid → region title (e.g. "Gruppe 1")
     base_params = {
         "mode":       "list",
         "league":     league,
         "game_class": game_class,
         "season":     season,
     }
+    if group:
+        base_params["group"] = group
     visited_rounds = set()
     round_param    = None  # None = start at default (latest) round
 
@@ -251,10 +298,17 @@ def fetch_game_rows(league, game_class, season):
         if not raw:
             break
 
-        data  = unwrap(raw)
-        found = 0
+        data    = unwrap(raw)
+        regions = data.get("regions", [])
+        found   = 0
 
-        for region in data.get("regions", []):
+        for i, region in enumerate(regions, 1):
+            # Use the region title when present; fall back to "Gruppe N" when
+            # there are multiple regions (e.g. 1. Liga has Gruppe 1 / Gruppe 2).
+            region_title = (region.get("title") or region.get("text") or "").strip()
+            if not region_title and len(regions) > 1:
+                region_title = f"Gruppe {i}"
+
             for row in region.get("rows", []):
                 gid = None
                 for cell in row.get("cells", []):
@@ -265,7 +319,8 @@ def fetch_game_rows(league, game_class, season):
                             gid = str(ids[0])
                             break
                 if gid and gid not in game_rows:
-                    game_rows[gid] = row
+                    game_rows[gid]   = row
+                    game_region[gid] = region_title
                     found += 1
 
         label = f"round={round_param}" if round_param else "latest"
@@ -281,7 +336,7 @@ def fetch_game_rows(league, game_class, season):
         else:
             break
 
-    return game_rows
+    return game_rows, game_region
 
 # ══════════════════════════════════════════════════════════════════════
 # STORE GAME
@@ -293,7 +348,7 @@ def _cell_link_id(cell):
     ids  = link.get("ids", [])
     return ids[0] if ids else None
 
-def store_game(conn, game_id, row, season, league_label):
+def store_game(conn, game_id, row, season, league_label, league_group_override=None):
     cells = row.get("cells", [])
     # New API layout (9 cells):
     #   0: date+time  1: location  2: home_name  3: home_logo
@@ -343,6 +398,10 @@ def store_game(conn, game_id, row, season, league_label):
 
     if not result or result in ("-:-", "-", ""):
         return None
+
+    # Allow caller to supply a league_group (e.g. "Gruppe 1" from region title)
+    if league_group_override:
+        league_grp = league_group_override
 
     iso_date, weekday = parse_date(date_raw)
     league  = norm_league(league_raw)
@@ -488,9 +547,12 @@ def backfill_game_phases(conn):
                 log.info(f"  Phases: {label_name} {season} already tagged, skipping.")
                 continue
 
-            log.info(f"  Phases: league={league_id} ({label_name}) season={season}…")
+            group = lg_cfg.get('group')
+            log.info(f"  Phases: league={league_id} ({label_name}{' '+group if group else ''}) season={season}…")
             base_params = {'mode': 'list', 'league': league_id,
                            'game_class': game_class, 'season': season}
+            if group:
+                base_params['group'] = group
 
             # BFS over all rounds: follow both prev AND next to handle APIs
             # that return round 1 by default (old seasons) or last round (recent seasons)
@@ -839,16 +901,67 @@ def export_json(conn):
     ):
         player_game_ids.setdefault(full_name, []).append(game_id)
 
+    # Swiss Unihockey API player_id per player (most recent season's id)
+    player_ids = {}
+    for name, pid in conn.execute(
+        "SELECT player_raw, player_id FROM lineups WHERE player_id IS NOT NULL"
+        " GROUP BY player_raw ORDER BY season DESC"
+    ):
+        player_ids.setdefault(name, pid)  # keep first (most recent season)
+
+    # Accurate team history from GOALS data (team_scored_raw is reliable;
+    # lineups table has home/away swapped so cannot be used for team attribution).
+    # Keyed by abbrev name (scorer_raw / assist_raw in goals match player_meta keys).
+    team_game_ids = {}   # abbrev_name → {team_name → set(game_ids)}
+    abbrev_set = set(full_to_abbrev.values())  # all known abbreviated names
+    for scorer, assist, game_id, team_raw in conn.execute(
+        "SELECT scorer_raw, assist_raw, game_id, team_scored_raw FROM goals"
+        " WHERE team_scored_raw IS NOT NULL"
+    ):
+        for player in (scorer, assist):
+            if not player:
+                continue
+            th = team_game_ids.setdefault(player, {})
+            th.setdefault(team_raw, set()).add(game_id)
+
     player_meta = {}
     for full_name in set(list(gp_total.keys()) + list(pos_map.keys())):
         key = full_to_abbrev.get(full_name, full_name)  # prefer abbreviated key
+        raw_th = team_game_ids.get(key, {})
+        team_gp = {team: len(gids) for team, gids in
+                   sorted(raw_th.items(), key=lambda x: -len(x[1]))}
         player_meta[key] = {
             "pos":   pos_map.get(full_name),
             "gp":    gp_total.get(full_name, 0),
             "gp_s":  gp_seasons.get(full_name, {}),
             "full":  full_name if key != full_name else None,  # only set if different from key
             "gids":  player_game_ids.get(full_name, []),
+            "pid":   player_ids.get(full_name),
+            "team_gp": team_gp,
         }
+
+    # ── Fetch official per-club statistics from Swiss Unihockey API ──────────
+    # Cached in player_statistics_cache table so repeated builds don't re-fetch.
+    stats_cache = {pid: json.loads(js) for pid, js in conn.execute(
+        "SELECT pid, stats_json FROM player_statistics_cache"
+    )}
+    newly_fetched = 0
+    players_with_pid = [(key, meta["pid"]) for key, meta in player_meta.items() if meta.get("pid")]
+    log.info(f"  Enriching {len(players_with_pid)} players with official statistics…")
+    for key, pid in players_with_pid:
+        if pid not in stats_cache:
+            stats = fetch_player_statistics(pid)
+            stats_cache[pid] = stats
+            conn.execute(
+                "INSERT OR REPLACE INTO player_statistics_cache (pid, stats_json, fetched_at)"
+                " VALUES (?, ?, ?)",
+                (pid, json.dumps(stats, ensure_ascii=False), datetime.now().isoformat())
+            )
+            conn.commit()
+            newly_fetched += 1
+            time.sleep(SLEEP)
+        player_meta[key]["verein_stats"] = stats_cache[pid]
+    log.info(f"  API fetches: {newly_fetched} new, {len(players_with_pid) - newly_fetched} cached")
 
     data = {'clubs': clubs_list, 'goals': goals, 'games': games,
             'penalties': penalties, 'seasons': seasons, 'player_meta': player_meta}
@@ -884,10 +997,12 @@ def run():
         league     = lg_cfg["league"]
         game_class = lg_cfg["game_class"]
         label      = lg_cfg["label"]
+        group      = lg_cfg.get("group")
 
         for season in lg_cfg.get("seasons", SEASONS):
-            log.info(f"\n{label}  season {season}/{season+1}…")
-            game_rows = fetch_game_rows(league, game_class, season)
+            group_tag = f" ({group})" if group else ""
+            log.info(f"\n{label}{group_tag}  season {season}/{season+1}…")
+            game_rows, game_region = fetch_game_rows(league, game_class, season, group=group)
             log.info(f"  Found {len(game_rows)} games")
 
             for gid, row in game_rows.items():
@@ -895,7 +1010,8 @@ def run():
                     log.debug(f"  Skip {gid} (already stored)")
                     continue
 
-                result = store_game(conn, gid, row, season, label)
+                result = store_game(conn, gid, row, season, label,
+                                    league_group_override=game_region.get(gid))
                 if result is None:
                     continue
 
