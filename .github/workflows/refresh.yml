@@ -40,4 +40,5 @@ jobs:
           git config user.name "GitHub Action"
           git add data.json
           git diff --cached --quiet || git commit -m "Weekly data refresh $(date +'%Y-%m-%d')"
+          git pull --rebase origin main
           git push
