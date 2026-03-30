@@ -18,7 +18,7 @@ jobs:
 
       - name: Download DB from release (if exists)
         run: |
-          gh release download db-cache --pattern "*.db" --dir . 2>/dev/null \
+          gh release download update --pattern "*.db" --dir . 2>/dev/null \
             && echo "DB restored from release" \
             || echo "No cached DB found, starting fresh"
         env:
@@ -37,8 +37,8 @@ jobs:
 
       - name: Upload updated DB to release
         run: |
-          gh release delete db-cache --yes 2>/dev/null || true
-          gh release create db-cache swiss_floorball_lupl.db \
+          gh release delete update --yes 2>/dev/null || true
+          gh release create update swiss_floorball_lupl.db \
             --title "DB Cache" --notes "Auto-updated DB" --prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
