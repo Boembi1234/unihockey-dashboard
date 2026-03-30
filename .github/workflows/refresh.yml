@@ -32,8 +32,10 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Fetch latest data
+      - name: Fetch latest data and sync to Supabase
         run: python fetch_weekly.py
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
       - name: Upload updated DB to release
         run: |
@@ -42,10 +44,3 @@ jobs:
             --title "DB Cache" --notes "Auto-updated DB" --prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Commit updated data.json
-        run: |
-          git config user.email "action@github.com"
-          git config user.name "GitHub Action"
-          git add data.json
-          git diff --cached --quiet || (git commit -m "Weekly data refresh $(date +'%Y-%m-%d')" && git pull --rebase origin main && git push)

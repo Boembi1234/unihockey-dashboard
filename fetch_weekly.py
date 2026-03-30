@@ -9,7 +9,7 @@ import time, logging
 from fetch_lupl import (
     get_db, fetch_game_rows, store_game, fetch_and_store_goals,
     fetch_and_store_lineup, backfill_game_phases, build_name_map,
-    export_json, SLEEP,
+    sync_to_supabase, SLEEP,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
@@ -70,6 +70,6 @@ if total_new > 0:
     log.info("Running build_name_map...")
     build_name_map(conn)
 
-log.info("Exporting data.json...")
-export_json(conn)
+log.info("Syncing to Supabase...")
+sync_to_supabase(conn)
 conn.close()

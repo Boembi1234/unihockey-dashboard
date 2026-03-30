@@ -28,6 +28,10 @@ log = logging.getLogger(__name__)
 BASE_URL  = "https://api-v2.swissunihockey.ch/api"
 DB_PATH   = "swiss_floorball_lupl.db"
 JSON_PATH = "data.json"
+
+# Supabase — set SUPABASE_SERVICE_KEY as an environment variable or paste here
+SUPABASE_URL         = "https://ibqwotgrzgrwvejtphnh.supabase.co"
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 SLEEP     = 0.4
 
 # Which leagues to fetch — add/remove entries as needed
@@ -133,8 +137,10 @@ CREATE TABLE IF NOT EXISTS lineups (
 CREATE INDEX IF NOT EXISTS idx_lin_player ON lineups(player_raw);
 CREATE INDEX IF NOT EXISTS idx_lin_game   ON lineups(game_id);
 CREATE TABLE IF NOT EXISTS name_map (
-    abbrev_name TEXT PRIMARY KEY,
-    full_name   TEXT NOT NULL
+    abbrev_name TEXT NOT NULL,
+    team_raw    TEXT NOT NULL,
+    full_name   TEXT NOT NULL,
+    PRIMARY KEY (abbrev_name, team_raw)
 );
 CREATE TABLE IF NOT EXISTS player_statistics_cache (
     pid        INTEGER PRIMARY KEY,
@@ -255,6 +261,12 @@ def team_hash(name):
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # Migrate name_map if it uses the old single-column primary key schema
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(name_map)")}
+    if cols and 'team_raw' not in cols:
+        log.info("  Migrating name_map to team-aware schema (dropping old table)…")
+        conn.execute("DROP TABLE IF EXISTS name_map")
+        conn.commit()
     conn.executescript(SCHEMA)
     conn.commit()
     return conn
@@ -668,52 +680,58 @@ def _match_abbrev(abbrev, full_names):
 
 def build_name_map(conn):
     """Match every abbreviated scorer/penalty name to a full lineup name.
-    Only confident (unique) matches are stored."""
+    Uses (abbrev_name, team_raw) as composite key for team-aware disambiguation.
+    Only confident (unique per team) matches are stored."""
     existing = conn.execute("SELECT COUNT(*) FROM name_map").fetchone()[0]
     if existing > 0:
         log.info(f"  name_map already has {existing} entries — skipping rebuild.")
         return
 
-    log.info("  Building name_map from lineups + game events…")
-    mapping   = {}   # abbrev → full  (confirmed)
+    log.info("  Building name_map from lineups + game events (team-aware)…")
+    mapping   = {}   # (abbrev, team_raw) → full  (confirmed)
     conflicts = set()
 
-    def try_add(abbrev, full_names):
-        if not abbrev or abbrev in conflicts:
+    def try_add(abbrev, team_raw, lineup_names):
+        if not abbrev or not team_raw or not lineup_names:
             return
-        full = _match_abbrev(abbrev, full_names)
+        key = (abbrev, team_raw)
+        if key in conflicts:
+            return
+        full = _match_abbrev(abbrev, lineup_names)
         if not full:
             return
-        if abbrev in mapping:
-            if mapping[abbrev] != full:
-                conflicts.add(abbrev)
-                del mapping[abbrev]
+        if key in mapping:
+            if mapping[key] != full:
+                conflicts.add(key)
+                del mapping[key]
         else:
-            mapping[abbrev] = full
+            mapping[key] = full
 
-    # Preload lineups grouped by game_id (both teams combined — avoids home/away ID mismatch)
-    lineup_index = {}   # game_id → [full_name, ...]
-    for gid, player in conn.execute("SELECT game_id, player_raw FROM lineups"):
-        lineup_index.setdefault(gid, []).append(player)
+    # Preload lineups grouped by (game_id, team_id) → [full_name, ...]
+    lineup_by_game_team = {}
+    for gid, tid, player in conn.execute("SELECT game_id, team_id, player_raw FROM lineups"):
+        lineup_by_game_team.setdefault((gid, tid), []).append(player)
 
-    # Match goal scorers / assisters
-    for gid, scorer, assist in conn.execute(
-        "SELECT game_id, scorer_raw, assist_raw FROM goals"
+    # Match goal scorers / assisters (team-aware: scorer belongs to team_scored)
+    for gid, scorer, assist, team_id, team_raw in conn.execute(
+        "SELECT game_id, scorer_raw, assist_raw, team_scored_id, team_scored_raw FROM goals"
+        " WHERE team_scored_raw IS NOT NULL"
     ):
-        names = lineup_index.get(gid, [])
-        try_add(scorer, names)
-        try_add(assist, names)
+        team_lineup = lineup_by_game_team.get((gid, team_id), [])
+        try_add(scorer, team_raw, team_lineup)
+        try_add(assist, team_raw, team_lineup)
 
     # Match penalty players
-    for gid, player in conn.execute(
-        "SELECT game_id, player_raw FROM penalties WHERE player_raw IS NOT NULL"
+    for gid, player, team_id, team_raw in conn.execute(
+        "SELECT game_id, player_raw, team_id, team_raw FROM penalties"
+        " WHERE player_raw IS NOT NULL AND team_raw IS NOT NULL"
     ):
-        names = lineup_index.get(gid, [])
-        try_add(player, names)
+        team_lineup = lineup_by_game_team.get((gid, team_id), [])
+        try_add(player, team_raw, team_lineup)
 
     conn.executemany(
-        "INSERT OR REPLACE INTO name_map (abbrev_name, full_name) VALUES (?,?)",
-        mapping.items()
+        "INSERT OR REPLACE INTO name_map (abbrev_name, team_raw, full_name) VALUES (?,?,?)",
+        [(abbrev, team, full) for (abbrev, team), full in mapping.items()]
     )
     conn.commit()
     log.info(f"  name_map: {len(mapping)} matches built, {len(conflicts)} conflicts skipped.")
@@ -796,6 +814,19 @@ def export_json(conn):
     ph    = ",".join("?" * len(games))
     g_ids = [g['game_id'] for g in games]
 
+    # Load team-aware name resolution: (abbrev, team_raw) → full_name
+    abbrev_team_to_full = {}
+    for abbrev, team, full in conn.execute(
+        "SELECT abbrev_name, team_raw, full_name FROM name_map"
+    ):
+        abbrev_team_to_full[(abbrev, team)] = full
+
+    def resolve_name(abbrev, team_raw):
+        """Resolve abbreviated scorer/assist name to full lineup name, or return as-is."""
+        if not abbrev:
+            return None
+        return abbrev_team_to_full.get((abbrev, team_raw), abbrev)
+
     goals = []
     for r in conn.execute(f"""
         SELECT g.*, gm.time as game_time, gm.league, gm.league_group,
@@ -806,6 +837,11 @@ def export_json(conn):
     """, g_ids):
         row = dict(r)
         row['league'] = norm_league(row.get('league'))
+        team_raw = row.get('team_scored_raw', '')
+        if row.get('scorer_raw'):
+            row['scorer_name'] = resolve_name(row['scorer_raw'], team_raw)
+        if row.get('assist_raw'):
+            row['assist_name'] = resolve_name(row['assist_raw'], team_raw)
         goals.append(row)
 
     # Build clubs → teams → leagues hierarchy
@@ -889,11 +925,6 @@ def export_json(conn):
     ):
         gp_seasons.setdefault(name, {})[str(season)] = gp
 
-    # name_map: full_name → abbrev_name  (so we key player_meta by abbreviated names)
-    full_to_abbrev = {full: abbrev for abbrev, full in conn.execute(
-        "SELECT abbrev_name, full_name FROM name_map"
-    )}
-
     # Game IDs per full name, ordered by date
     player_game_ids = {}
     for full_name, game_id in conn.execute(
@@ -909,59 +940,36 @@ def export_json(conn):
     ):
         player_ids.setdefault(name, pid)  # keep first (most recent season)
 
-    # Accurate team history from GOALS data (team_scored_raw is reliable;
-    # lineups table has home/away swapped so cannot be used for team attribution).
-    # Keyed by abbrev name (scorer_raw / assist_raw in goals match player_meta keys).
-    team_game_ids = {}   # abbrev_name → {team_name → set(game_ids)}
-    abbrev_set = set(full_to_abbrev.values())  # all known abbreviated names
+    # Team history from goals: resolve scorer/assist to full name using team-aware lookup,
+    # then attribute game to that full-name player. player_meta keys are always full names.
+    team_game_ids = {}   # full_name → {team_name → set(game_ids)}
     for scorer, assist, game_id, team_raw in conn.execute(
         "SELECT scorer_raw, assist_raw, game_id, team_scored_raw FROM goals"
         " WHERE team_scored_raw IS NOT NULL"
     ):
-        for player in (scorer, assist):
-            if not player:
+        for abbrev in (scorer, assist):
+            if not abbrev:
                 continue
-            th = team_game_ids.setdefault(player, {})
+            full = abbrev_team_to_full.get((abbrev, team_raw), abbrev)
+            th = team_game_ids.setdefault(full, {})
             th.setdefault(team_raw, set()).add(game_id)
 
+    # player_meta always keyed by full lineup name (no more abbreviated keys)
     player_meta = {}
     for full_name in set(list(gp_total.keys()) + list(pos_map.keys())):
-        key = full_to_abbrev.get(full_name, full_name)  # prefer abbreviated key
-        raw_th = team_game_ids.get(key, {})
+        raw_th = team_game_ids.get(full_name, {})
         team_gp = {team: len(gids) for team, gids in
                    sorted(raw_th.items(), key=lambda x: -len(x[1]))}
-        player_meta[key] = {
+        player_meta[full_name] = {
             "pos":   pos_map.get(full_name),
             "gp":    gp_total.get(full_name, 0),
             "gp_s":  gp_seasons.get(full_name, {}),
-            "full":  full_name if key != full_name else None,  # only set if different from key
             "gids":  player_game_ids.get(full_name, []),
             "pid":   player_ids.get(full_name),
             "team_gp": team_gp,
         }
 
-    # ── Fetch official per-club statistics from Swiss Unihockey API ──────────
-    # Cached in player_statistics_cache table so repeated builds don't re-fetch.
-    stats_cache = {pid: json.loads(js) for pid, js in conn.execute(
-        "SELECT pid, stats_json FROM player_statistics_cache"
-    )}
-    newly_fetched = 0
-    players_with_pid = [(key, meta["pid"]) for key, meta in player_meta.items() if meta.get("pid")]
-    log.info(f"  Enriching {len(players_with_pid)} players with official statistics…")
-    for key, pid in players_with_pid:
-        if pid not in stats_cache:
-            stats = fetch_player_statistics(pid)
-            stats_cache[pid] = stats
-            conn.execute(
-                "INSERT OR REPLACE INTO player_statistics_cache (pid, stats_json, fetched_at)"
-                " VALUES (?, ?, ?)",
-                (pid, json.dumps(stats, ensure_ascii=False), datetime.now().isoformat())
-            )
-            conn.commit()
-            newly_fetched += 1
-            time.sleep(SLEEP)
-        player_meta[key]["verein_stats"] = stats_cache[pid]
-    log.info(f"  API fetches: {newly_fetched} new, {len(players_with_pid) - newly_fetched} cached")
+    # API per-player stats intentionally not exported — game data is the single source of truth.
 
     data = {'clubs': clubs_list, 'goals': goals, 'games': games,
             'penalties': penalties, 'seasons': seasons, 'player_meta': player_meta}
@@ -978,6 +986,175 @@ def export_json(conn):
     log.info(f"    PlayerMeta:  {len(player_meta)} players")
     log.info(f"    Seasons:     {seasons}")
     log.info(f"    Size:        {size_mb:.2f} MB")
+
+# ══════════════════════════════════════════════════════════════════════
+# SUPABASE SYNC
+# ══════════════════════════════════════════════════════════════════════
+
+def _sb_headers():
+    return {
+        "apikey":        SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type":  "application/json",
+        "Prefer":        "resolution=merge-duplicates",
+    }
+
+def _sb_upsert(table, rows):
+    if not rows:
+        return
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    r = SESSION.post(url, headers=_sb_headers(),
+                     data=json.dumps(rows, default=str))
+    if r.status_code not in (200, 201):
+        log.error(f"  Supabase {table} failed [{r.status_code}]: {r.text[:300]}")
+        r.raise_for_status()
+
+def _batched(lst, n):
+    for i in range(0, len(lst), n):
+        yield lst[i:i+n]
+
+def sync_to_supabase(conn):
+    """Push all new/changed rows from SQLite to Supabase."""
+    if not SUPABASE_SERVICE_KEY:
+        log.warning("  SUPABASE_SERVICE_KEY not set — skipping Supabase sync.")
+        return
+
+    log.info("  Syncing to Supabase…")
+
+    LEAGUE_MAP_LOCAL = {
+        "Herren L-UPL":                  "Herren NLA",
+        "Herren SML":                    "Herren NLA",
+        "Herren Aktive KF 3. Liga":      "Herren 3. Liga",
+        "Mobiliar Unihockey Cup Männer": "Mobiliar Unihockey Cup Herren",
+    }
+    def nl(name): return LEAGUE_MAP_LOCAL.get(name, name) if name else name
+
+    # Load name map
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(name_map)")}
+    abbrev_team_to_full = {}
+    if "team_raw" in cols:
+        for abbrev, team, full in conn.execute(
+            "SELECT abbrev_name, team_raw, full_name FROM name_map"
+        ):
+            abbrev_team_to_full[(abbrev, team)] = full
+    else:
+        for abbrev, full in conn.execute("SELECT abbrev_name, full_name FROM name_map"):
+            abbrev_team_to_full[(abbrev, None)] = full
+
+    def resolve(abbrev, team_raw):
+        if not abbrev: return None
+        return (abbrev_team_to_full.get((abbrev, team_raw))
+                or abbrev_team_to_full.get((abbrev, None))
+                or abbrev)
+
+    # ── Games ──────────────────────────────────────────────────────────
+    games = [dict(r) for r in conn.execute("SELECT * FROM games ORDER BY date")]
+    for batch in _batched(games, 500):
+        _sb_upsert("fb_games", batch)
+    log.info(f"    fb_games: {len(games)} rows synced")
+
+    # ── Goals ──────────────────────────────────────────────────────────
+    GOAL_COLS = [
+        "game_id", "team_scored_id", "team_conceded_id", "team_scored_raw",
+        "team_conceded_raw", "scorer_raw", "assist_raw", "scorer_name",
+        "assist_name", "minute", "minute_seconds", "period", "score_at_goal",
+        "date", "season", "league", "league_group", "home_team_raw",
+        "away_team_raw", "home_team_id", "away_team_id",
+    ]
+    goal_rows = []
+    for r in conn.execute("""
+        SELECT g.*, gm.league, gm.league_group, gm.home_team_raw, gm.away_team_raw,
+               gm.home_team_id, gm.away_team_id
+        FROM goals g JOIN games gm ON g.game_id = gm.game_id
+    """):
+        raw = dict(r)
+        raw["league"] = nl(raw.get("league"))
+        t = raw.get("team_scored_raw", "")
+        raw["scorer_name"] = resolve(raw.get("scorer_raw"), t)
+        raw["assist_name"]  = resolve(raw.get("assist_raw"),  t)
+        goal_rows.append({c: raw.get(c) for c in GOAL_COLS})
+    for batch in _batched(goal_rows, 500):
+        _sb_upsert("fb_goals", batch)
+    log.info(f"    fb_goals: {len(goal_rows)} rows synced")
+
+    # ── Penalties ──────────────────────────────────────────────────────
+    PEN_COLS = [
+        "game_id", "team_id", "team_raw", "player_raw", "minute",
+        "minute_seconds", "period", "duration_min", "reason", "date",
+        "season", "league", "home_team_raw", "away_team_raw",
+        "home_team_id", "away_team_id",
+    ]
+    pen_rows = []
+    for r in conn.execute("""
+        SELECT p.*, gm.league, gm.home_team_raw, gm.away_team_raw,
+               gm.home_team_id, gm.away_team_id
+        FROM penalties p JOIN games gm ON p.game_id = gm.game_id
+    """):
+        raw = dict(r)
+        raw["league"] = nl(raw.get("league"))
+        pen_rows.append({c: raw.get(c) for c in PEN_COLS})
+    for batch in _batched(pen_rows, 500):
+        _sb_upsert("fb_penalties", batch)
+    log.info(f"    fb_penalties: {len(pen_rows)} rows synced")
+
+    # ── Player meta ────────────────────────────────────────────────────
+    pos_map = {}
+    for name, pos in conn.execute("""
+        SELECT player_raw, position FROM lineups WHERE position IS NOT NULL
+        GROUP BY player_raw, position ORDER BY player_raw, COUNT(*) DESC
+    """):
+        pos_map.setdefault(name, pos)
+
+    gp_total = {n: g for n, g in conn.execute(
+        "SELECT player_raw, COUNT(*) FROM lineups GROUP BY player_raw")}
+    gp_seasons = {}
+    for name, season, gp in conn.execute(
+        "SELECT player_raw, season, COUNT(*) FROM lineups GROUP BY player_raw, season"
+    ):
+        gp_seasons.setdefault(name, {})[str(season)] = gp
+
+    player_game_ids = {}
+    for name, gid in conn.execute(
+        "SELECT player_raw, game_id FROM lineups ORDER BY date, game_id"
+    ):
+        player_game_ids.setdefault(name, []).append(gid)
+
+    player_ids = {}
+    for name, pid in conn.execute(
+        "SELECT player_raw, player_id FROM lineups WHERE player_id IS NOT NULL"
+        " GROUP BY player_raw ORDER BY season DESC"
+    ):
+        player_ids.setdefault(name, pid)
+
+    team_game_ids = {}
+    for scorer, assist, game_id, team_raw in conn.execute(
+        "SELECT scorer_raw, assist_raw, game_id, team_scored_raw FROM goals"
+        " WHERE team_scored_raw IS NOT NULL"
+    ):
+        for abbrev in (scorer, assist):
+            if not abbrev: continue
+            full = (abbrev_team_to_full.get((abbrev, team_raw))
+                    or abbrev_team_to_full.get((abbrev, None)) or abbrev)
+            team_game_ids.setdefault(full, {}).setdefault(team_raw, set()).add(game_id)
+
+    meta_rows = []
+    for name in set(list(gp_total.keys()) + list(pos_map.keys())):
+        raw_th = team_game_ids.get(name, {})
+        team_gp = {t: len(gs) for t, gs in sorted(raw_th.items(), key=lambda x: -len(x[1]))}
+        meta_rows.append({
+            "player_name": name,
+            "pos":  pos_map.get(name),
+            "gp":   gp_total.get(name, 0),
+            "pid":  player_ids.get(name),
+            "team_gp": team_gp,
+            "gp_s":    gp_seasons.get(name, {}),
+            "gids":    player_game_ids.get(name, []),
+        })
+    for batch in _batched(meta_rows, 500):
+        _sb_upsert("fb_player_meta", batch)
+    log.info(f"    fb_player_meta: {len(meta_rows)} rows synced")
+    log.info("  ✅ Supabase sync complete.")
+
 
 # ══════════════════════════════════════════════════════════════════════
 # MAIN
@@ -1043,7 +1220,8 @@ def run():
     backfill_game_phases(conn)
     log.info(f"\n── Building name map…")
     build_name_map(conn)
-    export_json(conn)
+    log.info(f"\n── Syncing to Supabase…")
+    sync_to_supabase(conn)
     conn.close()
 
 
