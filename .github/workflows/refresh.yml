@@ -13,6 +13,13 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Restore DB cache
+        uses: actions/cache@v4
+        with:
+          path: swiss_floorball_lupl.db
+          key: floorball-db-${{ runner.os }}
+          restore-keys: floorball-db-
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -28,6 +35,6 @@ jobs:
         run: |
           git config user.email "action@github.com"
           git config user.name "GitHub Action"
-          git add data.json swiss_floorball_lupl.db
+          git add data.json
           git diff --cached --quiet || git commit -m "Weekly data refresh $(date +'%Y-%m-%d')"
           git push
