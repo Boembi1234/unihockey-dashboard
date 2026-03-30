@@ -3,7 +3,7 @@ name: Refresh data
 on:
   schedule:
     - cron: '0 6 * * 1'   # every Monday at 06:00 UTC
-  workflow_dispatch:         # also allows manual trigger from GitHub UI
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,12 +16,13 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Restore DB cache
-        uses: actions/cache@v4
-        with:
-          path: swiss_floorball_lupl.db
-          key: floorball-db-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: floorball-db-${{ runner.os }}-
+      - name: Download DB from release (if exists)
+        run: |
+          gh release download db-cache --pattern "*.db" --dir . 2>/dev/null \
+            && echo "DB restored from release" \
+            || echo "No cached DB found, starting fresh"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -34,11 +35,17 @@ jobs:
       - name: Fetch latest data
         run: python fetch_weekly.py
 
-      - name: Commit updated data
+      - name: Upload updated DB to release
+        run: |
+          gh release delete db-cache --yes 2>/dev/null || true
+          gh release create db-cache swiss_floorball_lupl.db \
+            --title "DB Cache" --notes "Auto-updated DB" --prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit updated data.json
         run: |
           git config user.email "action@github.com"
           git config user.name "GitHub Action"
           git add data.json
-          git diff --cached --quiet || git commit -m "Weekly data refresh $(date +'%Y-%m-%d')"
-          git pull --rebase origin main
-          git push
+          git diff --cached --quiet || (git commit -m "Weekly data refresh $(date +'%Y-%m-%d')" && git pull --rebase origin main && git push)
