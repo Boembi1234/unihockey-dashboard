@@ -17,8 +17,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: swiss_floorball_lupl.db
-          key: floorball-db-${{ runner.os }}
-          restore-keys: floorball-db-
+          key: floorball-db-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: floorball-db-${{ runner.os }}-
 
       - name: Set up Python
         uses: actions/setup-python@v5
