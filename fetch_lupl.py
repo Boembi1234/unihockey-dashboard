@@ -1,3 +1,4 @@
+
 """
 fetch_lupl.py
 =============
@@ -36,23 +37,69 @@ SLEEP     = 0.4
 
 # Which leagues to fetch — add/remove entries as needed
 # Full league list at the bottom of this file
+# ── TEST MODE: L-UPL + NLB + 1. Liga Gruppe 2 (2025). Restore FULL_LEAGUES below for full import. ──
 TARGET_LEAGUES = [
-    {"league": 24, "game_class": 11, "label": "Herren L-UPL", "seasons": [2025, 2024, 2023, 2022]},
-    {"league":  1, "game_class": 11, "label": "Herren NLA",
-     "seasons": [2021,2020,2019,2018,2017,2016,2015,2014,2013,
-                 2006,2005,2004,2003,2002,2001,2000,1999,1998,1997]},
-    {"league": 10, "game_class": 11, "label": "Herren NLA",
-     "seasons": [2012,2011,2010,2009,2008,2007]},
-    {"league":  2, "game_class": 11, "label": "Herren NLB",
-     "seasons": [2025,2024,2023,2022,2021,2020,2019,2018,2017,2016,
-                 2015,2014,2013,2012,2011,2010,2009,2008,2007,2006,
-                 2005,2004,2003,2002,2001,2000,1999,1998,1997]},
-    # Grossfeld only (game_class=11); two regional groups; seasons 2019–2025
-    {"league": 3, "game_class": 11, "group": "Gruppe 1", "label": "Herren 1. Liga",
-     "seasons": [2025, 2024, 2023, 2022, 2021, 2020, 2019]},
-    {"league": 3, "game_class": 11, "group": "Gruppe 2", "label": "Herren 1. Liga",
-     "seasons": [2025, 2024, 2023, 2022, 2021, 2020, 2019]},
+    # ══════════════════════════════════════════════════════════════════
+    # Current season only — historical data already in Supabase
+    # Groups are auto-discovered from the API tabs structure
+    # ══════════════════════════════════════════════════════════════════
+
+    # ── Herren Grossfeld ──
+    {"league": 24, "game_class": 11, "label": "Herren L-UPL", "seasons": [2025]},
+    {"league":  2, "game_class": 11, "label": "Herren NLB", "seasons": [2025]},
+    {"league":  3, "game_class": 11, "label": "Herren 1. Liga", "seasons": [2025]},
+    {"league":  4, "game_class": 11, "label": "Herren 2. Liga", "seasons": [2025]},
+    {"league":  5, "game_class": 11, "label": "Herren 3. Liga", "seasons": [2025]},
+    {"league":  6, "game_class": 11, "label": "Herren 4. Liga", "seasons": [2025]},
+
+    # ── Herren Kleinfeld ──
+    {"league":  3, "game_class": 12, "label": "Herren 1. Liga KF", "seasons": [2025]},
+    {"league":  4, "game_class": 12, "label": "Herren 2. Liga KF", "seasons": [2025]},
+   
+    # ── Damen Grossfeld ──
+    {"league": 24, "game_class": 21, "label": "Damen L-UPL", "seasons": [2025]},
+    {"league":  2, "game_class": 21, "label": "Damen NLB", "seasons": [2025]},
+    {"league":  3, "game_class": 21, "label": "Damen 1. Liga", "seasons": [2025]},
+  
+
+    # ── Damen Kleinfeld ──
+    {"league":  3, "game_class": 22, "label": "Damen 1. Liga KF", "seasons": [2025]},
+   
+    # ── Junioren A (national) ──
+    {"league": 13, "game_class": 19, "label": "Junioren U21 A", "seasons": [2025]},
+    {"league": 13, "game_class": 18, "label": "Junioren U18 A", "seasons": [2025]},
+    {"league": 13, "game_class": 16, "label": "Junioren U16 A", "seasons": [2025]},
+    {"league": 13, "game_class": 14, "label": "Junioren U14 A", "seasons": [2025]},
+
+    # ── Junioren B ──
+    {"league": 14, "game_class": 19, "label": "Junioren U21 B", "seasons": [2025]},
+    {"league": 14, "game_class": 18, "label": "Junioren U18 B", "seasons": [2025]},
+    {"league": 14, "game_class": 16, "label": "Junioren U16 B", "seasons": [2025]},
+    {"league": 14, "game_class": 14, "label": "Junioren U14 B", "seasons": [2025]},
+
+    # ── Juniorinnen ──
+    {"league": 13, "game_class": 26, "label": "Juniorinnen U21 A", "seasons": [2025]},
+    {"league": 13, "game_class": 28, "label": "Juniorinnen U17 A", "seasons": [2025]},
+
 ]
+
+# FULL_LEAGUES — uncomment and assign to TARGET_LEAGUES for full import:
+# TARGET_LEAGUES = [
+#     {"league": 24, "game_class": 11, "label": "Herren L-UPL", "seasons": [2025, 2024, 2023, 2022]},
+#     {"league":  1, "game_class": 11, "label": "Herren NLA",
+#      "seasons": [2021,2020,2019,2018,2017,2016,2015,2014,2013,
+#                  2006,2005,2004,2003,2002,2001,2000,1999,1998,1997]},
+#     {"league": 10, "game_class": 11, "label": "Herren NLA",
+#      "seasons": [2012,2011,2010,2009,2008,2007]},
+#     {"league":  2, "game_class": 11, "label": "Herren NLB",
+#      "seasons": [2025,2024,2023,2022,2021,2020,2019,2018,2017,2016,
+#                  2015,2014,2013,2012,2011,2010,2009,2008,2007,2006,
+#                  2005,2004,2003,2002,2001,2000,1999,1998,1997]},
+#     {"league": 3, "game_class": 11, "group": "Gruppe 1", "label": "Herren 1. Liga",
+#      "seasons": [2025, 2024, 2023, 2022, 2021, 2020, 2019]},
+#     {"league": 3, "game_class": 11, "group": "Gruppe 2", "label": "Herren 1. Liga",
+#      "seasons": [2025, 2024, 2023, 2022, 2021, 2020, 2019]},
+# ]
 
 SEASONS = []  # per-league seasons defined above
 
@@ -278,6 +325,40 @@ def upsert_team(conn, team_id, name):
 # FETCH GAME ROWS  ← KEY FIX: correct params, no "mode" needed
 # ══════════════════════════════════════════════════════════════════════
 
+def discover_groups(league, game_class, season):
+    """Discover available groups from the API tabs structure.
+    Makes ONE API call and reads the nested tab entries to find all groups."""
+    raw = api_get("games", {
+        "mode": "list",
+        "league": league,
+        "game_class": game_class,
+        "season": season,
+    })
+    if not raw:
+        return []
+    data = unwrap(raw)
+
+    # Look through tabs → entries → sub-entries for matching league/game_class
+    for tab in data.get("tabs", []):
+        for entry in tab.get("entries", []):
+            ctx = entry.get("set_in_context", {})
+            if ctx.get("league") == league and ctx.get("game_class") == game_class:
+                # Found our league — extract group names from sub-entries
+                groups = []
+                for sub in entry.get("entries", []):
+                    g = sub.get("set_in_context", {}).get("group")
+                    if g and g not in ("Nachtragsspiele", "Spielfortführung"):
+                        groups.append(g)
+                return groups
+
+    # Fallback: check context for current group
+    ctx = data.get("context", {})
+    if ctx.get("group"):
+        return [ctx["group"]]
+
+    return []
+
+
 def fetch_game_rows(league, game_class, season, group=None):
     """
     GET /api/games?mode=list&league=24&game_class=11&season=2025[&group=Gruppe+1]
@@ -344,6 +425,53 @@ def fetch_game_rows(league, game_class, season, group=None):
         if prev and prev not in visited_rounds:
             visited_rounds.add(prev)
             round_param = prev
+            time.sleep(SLEEP)
+        else:
+            break
+
+    # Also navigate forward from the latest round to catch playout/relegation rounds
+    round_param = None  # reset to latest
+    while True:
+        params = dict(base_params)
+        if round_param is not None:
+            params["round"] = round_param
+
+        raw = api_get("games", params)
+        if not raw:
+            break
+
+        data    = unwrap(raw)
+        regions = data.get("regions", [])
+        found   = 0
+
+        for i, region in enumerate(regions, 1):
+            region_title = (region.get("title") or region.get("text") or "").strip()
+            if not region_title and len(regions) > 1:
+                region_title = f"Gruppe {i}"
+
+            for row in region.get("rows", []):
+                gid = None
+                for cell in row.get("cells", []):
+                    link = cell.get("link") or {}
+                    if link.get("page") == "game_detail":
+                        ids = link.get("ids", [])
+                        if ids:
+                            gid = str(ids[0])
+                            break
+                if gid and gid not in game_rows:
+                    game_rows[gid]   = row
+                    game_region[gid] = region_title
+                    found += 1
+
+        if found > 0:
+            label = f"round={round_param}" if round_param else "latest"
+            log.info(f"    [{label} fwd]: {found} new games")
+
+        slider = data.get("slider", {})
+        nxt    = slider.get("next", {}).get("set_in_context", {}).get("round")
+        if nxt and nxt not in visited_rounds:
+            visited_rounds.add(nxt)
+            round_param = nxt
             time.sleep(SLEEP)
         else:
             break
@@ -681,13 +809,16 @@ def _match_abbrev(abbrev, full_names):
 def build_name_map(conn):
     """Match every abbreviated scorer/penalty name to a full lineup name.
     Uses (abbrev_name, team_raw) as composite key for team-aware disambiguation.
-    Only confident (unique per team) matches are stored."""
+    Only confident (unique per team) matches are stored.
+
+    NOTE: Matches against ALL players in a game (not filtered by team_id)
+    because lineup team_ids may be reversed for some historical games."""
     existing = conn.execute("SELECT COUNT(*) FROM name_map").fetchone()[0]
     if existing > 0:
         log.info(f"  name_map already has {existing} entries — skipping rebuild.")
         return
 
-    log.info("  Building name_map from lineups + game events (team-aware)…")
+    log.info("  Building name_map from lineups + game events…")
     mapping   = {}   # (abbrev, team_raw) → full  (confirmed)
     conflicts = set()
 
@@ -707,27 +838,28 @@ def build_name_map(conn):
         else:
             mapping[key] = full
 
-    # Preload lineups grouped by (game_id, team_id) → [full_name, ...]
-    lineup_by_game_team = {}
-    for gid, tid, player in conn.execute("SELECT game_id, team_id, player_raw FROM lineups"):
-        lineup_by_game_team.setdefault((gid, tid), []).append(player)
+    # Preload lineups grouped by game_id → [full_name, ...]
+    # (uses all players in the game to handle reversed team_ids)
+    lineup_by_game = {}
+    for gid, player in conn.execute("SELECT game_id, player_raw FROM lineups"):
+        lineup_by_game.setdefault(gid, []).append(player)
 
-    # Match goal scorers / assisters (team-aware: scorer belongs to team_scored)
-    for gid, scorer, assist, team_id, team_raw in conn.execute(
-        "SELECT game_id, scorer_raw, assist_raw, team_scored_id, team_scored_raw FROM goals"
+    # Match goal scorers / assisters
+    for gid, scorer, assist, team_raw in conn.execute(
+        "SELECT game_id, scorer_raw, assist_raw, team_scored_raw FROM goals"
         " WHERE team_scored_raw IS NOT NULL"
     ):
-        team_lineup = lineup_by_game_team.get((gid, team_id), [])
-        try_add(scorer, team_raw, team_lineup)
-        try_add(assist, team_raw, team_lineup)
+        game_lineup = lineup_by_game.get(gid, [])
+        try_add(scorer, team_raw, game_lineup)
+        try_add(assist, team_raw, game_lineup)
 
     # Match penalty players
-    for gid, player, team_id, team_raw in conn.execute(
-        "SELECT game_id, player_raw, team_id, team_raw FROM penalties"
+    for gid, player, team_raw in conn.execute(
+        "SELECT game_id, player_raw, team_raw FROM penalties"
         " WHERE player_raw IS NOT NULL AND team_raw IS NOT NULL"
     ):
-        team_lineup = lineup_by_game_team.get((gid, team_id), [])
-        try_add(player, team_raw, team_lineup)
+        game_lineup = lineup_by_game.get(gid, [])
+        try_add(player, team_raw, game_lineup)
 
     conn.executemany(
         "INSERT OR REPLACE INTO name_map (abbrev_name, team_raw, full_name) VALUES (?,?,?)",
@@ -1047,11 +1179,27 @@ def sync_to_supabase(conn):
                 or abbrev_team_to_full.get((abbrev, None))
                 or abbrev)
 
+    # ── Build lineup lookup: game_id → { home_lineup: [...], away_lineup: [...] }
+    lineup_lookup = {}
+    for gid, tid, player, is_home in conn.execute(
+        "SELECT l.game_id, l.team_id, l.player_raw, "
+        "  CASE WHEN l.team_id = g.home_team_id THEN 1 ELSE 0 END as is_home "
+        "FROM lineups l JOIN games g ON l.game_id = g.game_id"
+    ):
+        if gid not in lineup_lookup:
+            lineup_lookup[gid] = {"home_lineup": [], "away_lineup": []}
+        key = "home_lineup" if is_home else "away_lineup"
+        lineup_lookup[gid][key].append(player)
+
     # ── Games ──────────────────────────────────────────────────────────
     games = [dict(r) for r in conn.execute("SELECT * FROM games ORDER BY date")]
+    for g in games:
+        lu = lineup_lookup.get(g["game_id"], {})
+        g["home_lineup"] = lu.get("home_lineup", [])
+        g["away_lineup"] = lu.get("away_lineup", [])
     for batch in _batched(games, 500):
         _sb_upsert("fb_games", batch)
-    log.info(f"    fb_games: {len(games)} rows synced")
+    log.info(f"    fb_games: {len(games)} rows synced ({len(lineup_lookup)} with lineups)")
 
     # ── Goals ──────────────────────────────────────────────────────────
     GOAL_COLS = [
@@ -1137,10 +1285,21 @@ def sync_to_supabase(conn):
                     or abbrev_team_to_full.get((abbrev, None)) or abbrev)
             team_game_ids.setdefault(full, {}).setdefault(team_raw, set()).add(game_id)
 
+    # Compute total goals/assists from goals table
+    total_goals = {}
+    total_assists = {}
+    for scorer, assist in conn.execute("SELECT scorer_raw, assist_raw FROM goals"):
+        s_full = (abbrev_team_to_full.get((scorer, None)) or scorer) if scorer else None
+        a_full = (abbrev_team_to_full.get((assist, None)) or assist) if assist else None
+        if s_full: total_goals[s_full] = total_goals.get(s_full, 0) + 1
+        if a_full: total_assists[a_full] = total_assists.get(a_full, 0) + 1
+
     meta_rows = []
     for name in set(list(gp_total.keys()) + list(pos_map.keys())):
         raw_th = team_game_ids.get(name, {})
         team_gp = {t: len(gs) for t, gs in sorted(raw_th.items(), key=lambda x: -len(x[1]))}
+        g = total_goals.get(name, 0)
+        a = total_assists.get(name, 0)
         meta_rows.append({
             "player_name": name,
             "pos":  pos_map.get(name),
@@ -1149,6 +1308,9 @@ def sync_to_supabase(conn):
             "team_gp": team_gp,
             "gp_s":    gp_seasons.get(name, {}),
             "gids":    player_game_ids.get(name, []),
+            "total_goals": g,
+            "total_assists": a,
+            "total_points": g + a,
         })
     for batch in _batched(meta_rows, 500):
         _sb_upsert("fb_player_meta", batch)
@@ -1174,39 +1336,55 @@ def run():
         league     = lg_cfg["league"]
         game_class = lg_cfg["game_class"]
         label      = lg_cfg["label"]
-        group      = lg_cfg.get("group")
+        explicit_group = lg_cfg.get("group")
 
         for season in lg_cfg.get("seasons", SEASONS):
-            group_tag = f" ({group})" if group else ""
-            log.info(f"\n{label}{group_tag}  season {season}/{season+1}…")
-            game_rows, game_region = fetch_game_rows(league, game_class, season, group=group)
-            log.info(f"  Found {len(game_rows)} games")
-
-            for gid, row in game_rows.items():
-                if conn.execute("SELECT 1 FROM games WHERE game_id=?", (gid,)).fetchone():
-                    log.debug(f"  Skip {gid} (already stored)")
-                    continue
-
-                result = store_game(conn, gid, row, season, label,
-                                    league_group_override=game_region.get(gid))
-                if result is None:
-                    continue
-
-                home_id, away_id, home_name, away_name, iso_date, weekday = result
+            # Discover groups if none specified
+            if explicit_group:
+                groups_to_fetch = [explicit_group]
+            else:
                 time.sleep(SLEEP)
-                ng, np = fetch_and_store_goals(conn, gid, home_id, away_id,
-                                               home_name, away_name, iso_date, weekday, season)
-                conn.commit()
-                total_games += 1
-                total_goals += ng
-                total_pen   += np
-                # also fetch lineups for the new game
-                time.sleep(SLEEP)
-                for is_home, tid, tname in [(0, away_id, away_name), (1, home_id, home_name)]:
+                discovered = discover_groups(league, game_class, season)
+                if discovered:
+                    groups_to_fetch = discovered
+                    log.info(f"\n{label}  season {season}/{season+1} — discovered {len(discovered)} groups: {discovered}")
+                else:
+                    groups_to_fetch = [None]  # no groups, fetch default
+
+            for grp in groups_to_fetch:
+                group_tag = f" ({grp})" if grp else ""
+                log.info(f"\n{label}{group_tag}  season {season}/{season+1}…")
+                game_rows, game_region = fetch_game_rows(league, game_class, season, group=grp)
+                log.info(f"  Found {len(game_rows)} games")
+
+                # Determine league_group label for storage
+                league_group_label = grp if grp else None
+
+                for gid, row in game_rows.items():
+                    if conn.execute("SELECT 1 FROM games WHERE game_id=?", (gid,)).fetchone():
+                        log.debug(f"  Skip {gid} (already stored)")
+                        continue
+
+                    result = store_game(conn, gid, row, season, label,
+                                        league_group_override=league_group_label or game_region.get(gid))
+                    if result is None:
+                        continue
+
+                    home_id, away_id, home_name, away_name, iso_date, weekday = result
                     time.sleep(SLEEP)
-                    fetch_and_store_lineup(conn, gid, tid, is_home, tname, season, iso_date)
-                conn.commit()
-                log.info(f"  ✓ {home_name} vs {away_name}  [{iso_date}]  {ng} goals  {np} pen")
+                    ng, np = fetch_and_store_goals(conn, gid, home_id, away_id,
+                                                   home_name, away_name, iso_date, weekday, season)
+                    conn.commit()
+                    total_games += 1
+                    total_goals += ng
+                    total_pen   += np
+                    # also fetch lineups for the new game
+                    time.sleep(SLEEP)
+                    for is_home, tid, tname in [(0, away_id, away_name), (1, home_id, home_name)]:
+                        time.sleep(SLEEP)
+                        fetch_and_store_lineup(conn, gid, tid, is_home, tname, season, iso_date)
+                    conn.commit()
+                    log.info(f"  ✓ {home_name} vs {away_name}  [{iso_date}]  {ng} goals  {np} pen")
 
     log.info(f"\n── New games ─────────────────")
     log.info(f"  Games stored: {total_games}")
