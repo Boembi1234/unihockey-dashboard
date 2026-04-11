@@ -54,7 +54,10 @@ def get_recent_game_ids():
             league_name = league.get("league", "")
             for g in league.get("games", []):
                 result = g.get("result", "")
-                if result and result not in ("-:-", "-", ""):
+                time_str = g.get("time", "")
+                is_finished = "beendet" in time_str.lower() if time_str else False
+                # Only include finished games (not live/upcoming)
+                if result and result not in ("-:-", "-", "") and (is_finished or g.get("date", "") < datetime.now().strftime("%Y-%m-%d")):
                     games.append({
                         "id": str(g["id"]),
                         "league": league_name,

@@ -2,7 +2,7 @@ name: Refresh data
 
 on:
   schedule:
-    - cron: '0 6 * * *'   # Daily at 06:00 UTC — games show up within 24h
+    - cron: '0 3 * * *'   # Daily at 03:00 UTC (04:00 Swiss time)
   workflow_dispatch:        # manual trigger
 
 permissions:
