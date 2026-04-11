@@ -37,15 +37,15 @@ def get_recent_game_ids():
     }
 
     cutoff = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
-    url = f"{SUPABASE_URL}/rest/v1/live_games_cache?select=game_date,payload&game_date=gte.{cutoff}"
+    url = f"{SUPABASE_URL}/rest/v1/live_games_cache?select=game_date,data&game_date=gte.{cutoff}"
     r = SESSION.get(url, headers=headers)
     if r.status_code != 200:
-        log.error(f"Failed to fetch live_games_cache: {r.status_code}")
+        log.error(f"Failed to fetch live_games_cache: {r.status_code} {r.text[:200]}")
         return []
 
     games = []
     for row in r.json():
-        payload = row.get("payload")
+        payload = row.get("data")
         if isinstance(payload, str):
             payload = json.loads(payload)
         if not payload:
