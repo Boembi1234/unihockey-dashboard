@@ -11,6 +11,7 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    timeout-minutes: 15     # Should finish in < 2 minutes
 
     steps:
       - name: Checkout repo
@@ -32,8 +33,8 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Fetch latest data and sync to Supabase
-        run: python fetch_weekly.py
+      - name: Fast daily refresh
+        run: python fetch_daily.py
         env:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
