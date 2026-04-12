@@ -36,7 +36,7 @@ def get_recent_game_ids():
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
     }
 
-    cutoff = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+    cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
     url = f"{SUPABASE_URL}/rest/v1/live_games_cache?select=game_date,data&game_date=gte.{cutoff}"
     r = SESSION.get(url, headers=headers)
     if r.status_code != 200:
@@ -69,65 +69,80 @@ def get_recent_game_ids():
     return games
 
 
-def fetch_game_detail(game_id):
-    """Fetch game detail from API to get team IDs, date, location etc."""
-    raw = api_get(f"games/{game_id}", {})
+
+def store_game_from_api(conn, gid, league_label, season, cached_game):
+    """Fetch game detail from API and store in SQLite.
+    Returns (home_id, away_id, home_name, away_name, iso_date, weekday) or None."""
+    raw = api_get(f"games/{gid}", {})
     if not raw:
         return None
-    return unwrap(raw)
 
+    data = unwrap(raw)
+    headers = data.get("headers", [])
+    rows = data.get("regions", [{}])[0].get("rows", [])
+    if not rows:
+        return None
 
-def store_game_from_detail(conn, gid, detail, league_label, season):
-    """Parse game detail API response and store in SQLite."""
-    # The detail response has attribute list with game info
-    attrs = {}
-    for region in detail.get("regions", []):
-        for row in region.get("rows", []):
-            cells = row.get("cells", [])
-            if len(cells) >= 2:
-                key = cells[0].get("text", [""])[0].strip() if cells[0].get("text") else ""
-                val = cells[1].get("text", [""])[0].strip() if cells[1].get("text") else ""
-                link = cells[1].get("link", {})
-                if key:
-                    attrs[key] = {"text": val, "link": link, "ids": link.get("ids", [])}
+    cells = rows[0].get("cells", [])
+    header_keys = [h.get("key", "") for h in headers]
 
-    # Try to get team info from tabs/context
-    context = detail.get("context", {})
-    tabs = detail.get("tabs", [])
+    def get_cell(key):
+        if key not in header_keys:
+            return None, []
+        idx = header_keys.index(key)
+        if idx >= len(cells):
+            return None, []
+        c = cells[idx]
+        text = c.get("text", [None])[0] if c.get("text") else None
+        ids = c.get("link", {}).get("ids", [])
+        return text, ids
 
-    # Extract teams from the game detail
-    home_name = ""
-    away_name = ""
-    home_id = 0
-    away_id = 0
-    result = ""
-    date_str = ""
-    time_str = ""
-    location = ""
+    home_name, home_ids = get_cell("home_name")
+    away_name, away_ids = get_cell("away_name")
+    result_text, _ = get_cell("result")
+    time_text, _ = get_cell("time")
+    location_text, _ = get_cell("location")
 
-    # Parse from title which often has "Home vs Away"
-    title = detail.get("title", "")
+    if not home_name or not away_name:
+        return None
 
-    # Try to get from the game list API instead (more reliable)
-    raw2 = api_get("games", {"mode": "list", "game_id": gid})
-    if raw2:
-        data2 = unwrap(raw2)
-        for region in data2.get("regions", []):
-            for row in region.get("rows", []):
-                cells = row.get("cells", [])
-                row_gid = None
-                for cell in cells:
-                    link = cell.get("link", {})
-                    if link.get("page") == "game_detail":
-                        ids = link.get("ids", [])
-                        if ids:
-                            row_gid = str(ids[0])
-                if row_gid == gid:
-                    # Found our game row — use store_game from fetch_lupl
-                    from fetch_lupl import store_game
-                    return store_game(conn, gid, row, season, league_label)
+    home_id = home_ids[0] if home_ids else 0
+    away_id = away_ids[0] if away_ids else 0
 
-    return None
+    # Use cached_game date (reliable ISO format) since API returns "gestern" etc.
+    iso_date = cached_game.get("date", "")
+    weekday_map = {0: "Mo", 1: "Di", 2: "Mi", 3: "Do", 4: "Fr", 5: "Sa", 6: "So"}
+    try:
+        weekday = weekday_map.get(datetime.strptime(iso_date, "%Y-%m-%d").weekday(), "")
+    except:
+        weekday = ""
+
+    # Extract league from subtitle (e.g. "Herren GF L-UPL Playoff ...")
+    subtitle = data.get("subtitle", "")
+
+    # Determine league_group from subtitle if present
+    league_group = None
+
+    # Store result
+    result = result_text if result_text and ":" in result_text else None
+    if not result:
+        return None  # game not finished
+
+    try:
+        conn.execute("""
+            INSERT OR IGNORE INTO games
+              (game_id, home_team_id, away_team_id, home_team_raw, away_team_raw,
+               date, weekday, time, season, league, league_group, result, location)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (gid, home_id, away_id, home_name, away_name,
+              iso_date, weekday, time_text, season, league_label, league_group,
+              result, location_text))
+        conn.commit()
+    except Exception as e:
+        log.warning(f"    Insert error: {e}")
+        return None
+
+    return (home_id, away_id, home_name, away_name, iso_date, weekday)
 
 
 def sync_new_to_supabase(conn, game_ids):
@@ -266,7 +281,7 @@ def run():
 
         # Use the game events API to get the game row for store_game
         time.sleep(SLEEP)
-        result = store_game_from_detail(conn, gid, {}, g["league"], season)
+        result = store_game_from_api(conn, gid, g["league"], season, g)
         if result is None:
             log.warning(f"    Could not store game {gid}")
             continue
