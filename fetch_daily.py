@@ -2,8 +2,8 @@
 
 Flow:
 1. Read live_games_cache from Supabase (last 3 days)
-2. Parse game IDs from the cached JSON
-3. For each game not in SQLite: fetch details, goals, lineups from API
+2. Parse game IDs from the cached JSON (only "Spiel beendet")
+3. For each game not in SQLite: use store_game + fetch_and_store_goals from fetch_lupl
 4. Sync new games to Supabase
 """
 import sys, os, time, json, logging
@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import requests
 from fetch_lupl import (
-    get_db, fetch_and_store_goals, fetch_and_store_lineup,
+    get_db, store_game, fetch_and_store_goals, fetch_and_store_lineup,
     build_name_map, api_get, unwrap, SLEEP,
     SUPABASE_URL, SUPABASE_SERVICE_KEY,
     _sb_upsert, _batched,
@@ -25,8 +25,6 @@ log = logging.getLogger(__name__)
 
 SESSION = requests.Session()
 
-
-# ── Step 1: Get finished game IDs from Supabase cache ─────────────────────
 
 def get_cached_games():
     """Read finished games from live_games_cache (last 3 days)."""
@@ -42,7 +40,7 @@ def get_cached_games():
     url = f"{SUPABASE_URL}/rest/v1/live_games_cache?select=game_date,data&game_date=gte.{cutoff}"
     r = SESSION.get(url, headers=headers)
     if r.status_code != 200:
-        log.error(f"Cache fetch failed: {r.status_code} {r.text[:200]}")
+        log.error(f"Cache fetch failed: {r.status_code}")
         return []
 
     games = []
@@ -55,10 +53,9 @@ def get_cached_games():
         for league in payload.get("leagues", []):
             league_name = league.get("league", "")
             for g in league.get("games", []):
-                time_str = g.get("time", "")
+                t = g.get("time", "")
                 result = g.get("result", "")
-                # Only finished games
-                if "beendet" not in time_str.lower():
+                if "beendet" not in t.lower():
                     continue
                 if not result or result in ("-:-", "-", ""):
                     continue
@@ -70,20 +67,21 @@ def get_cached_games():
     return games
 
 
-# ── Step 2: Fetch game details from API ───────────────────────────────────
-
-def fetch_and_store_game(conn, gid, league_label, game_date, season):
-    """GET /api/games/:id → parse home/away/result → store in SQLite."""
-    raw = api_get(f"games/{gid}", {})
+def fetch_game_row(game_id):
+    """Fetch the game row from the games list API (same format store_game expects)."""
+    # The games API with mode=current returns rows we can pass to store_game
+    raw = api_get(f"games/{game_id}", {})
     if not raw:
-        return None
-
+        return None, None
     data = unwrap(raw)
+
+    # The detail API returns a single row — convert to the format store_game expects
     headers = data.get("headers", [])
     rows = data.get("regions", [{}])[0].get("rows", [])
     if not rows:
-        return None
+        return None, None
 
+    # Build a fake row matching the game list format that store_game expects
     cells = rows[0].get("cells", [])
     key_to_idx = {h.get("key", ""): i for i, h in enumerate(headers)}
 
@@ -103,31 +101,21 @@ def fetch_and_store_game(conn, gid, league_label, game_date, season):
     location_text, _ = cell_val("location")
 
     if not home_name or not away_name or not result_text:
-        return None
+        return None, None
 
     home_id = home_ids[0] if home_ids else 0
     away_id = away_ids[0] if away_ids else 0
 
-    weekday_map = {0: "Mo", 1: "Di", 2: "Mi", 3: "Do", 4: "Fr", 5: "Sa", 6: "So"}
-    try:
-        weekday = weekday_map.get(datetime.strptime(game_date, "%Y-%m-%d").weekday(), "")
-    except Exception:
-        weekday = ""
+    return {
+        "home_id": home_id,
+        "away_id": away_id,
+        "home_name": home_name,
+        "away_name": away_name,
+        "result": result_text,
+        "time": time_text,
+        "location": location_text,
+    }, data.get("subtitle", "")
 
-    conn.execute("""
-        INSERT OR IGNORE INTO games
-          (game_id, home_team_id, away_team_id, home_team_raw, away_team_raw,
-           date, weekday, time, season, league, result, location)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (gid, home_id, away_id, home_name, away_name,
-          game_date, weekday, time_text, season, league_label,
-          result_text, location_text))
-    conn.commit()
-
-    return (home_id, away_id, home_name, away_name, game_date, weekday)
-
-
-# ── Step 3: Sync new games to Supabase ────────────────────────────────────
 
 def sync_games_to_supabase(conn, game_ids):
     """Push only the specified games + goals + penalties to Supabase."""
@@ -137,7 +125,6 @@ def sync_games_to_supabase(conn, game_ids):
     LEAGUE_MAP = {"Herren L-UPL": "Herren NLA", "Herren SML": "Herren NLA"}
     def nl(name): return LEAGUE_MAP.get(name, name) if name else name
 
-    # Name map
     cols = {r[1] for r in conn.execute("PRAGMA table_info(name_map)")}
     name_lookup = {}
     if "team_raw" in cols:
@@ -151,7 +138,7 @@ def sync_games_to_supabase(conn, game_ids):
 
     ph = ",".join("?" * len(game_ids))
 
-    # Lineups
+    # Lineups — swap because API stores with reversed team_ids
     lineup_lookup = {}
     for gid, tid, player, is_home in conn.execute(
         f"SELECT l.game_id, l.team_id, l.player_raw, "
@@ -221,13 +208,10 @@ def sync_games_to_supabase(conn, game_ids):
     log.info(f"    fb_penalties: {len(pen_rows)} rows")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────
-
 def run():
     log.info("=== Fast Daily Refresh ===")
     season = 2025
 
-    # 1. Get game IDs from cache
     cached = get_cached_games()
     log.info(f"  {len(cached)} finished games in cache (last 3 days)")
 
@@ -235,7 +219,6 @@ def run():
         log.info("  Nothing to process.")
         return
 
-    # 2. Filter to new games
     conn = get_db()
     new_games = [g for g in cached if not conn.execute("SELECT 1 FROM games WHERE game_id=?", (g["id"],)).fetchone()]
     log.info(f"  {len(new_games)} new games to import")
@@ -245,7 +228,6 @@ def run():
         conn.close()
         return
 
-    # 3. Fetch each game
     imported = []
     total_goals = total_pen = 0
 
@@ -253,22 +235,49 @@ def run():
         gid = g["id"]
         time.sleep(SLEEP)
 
-        result = fetch_and_store_game(conn, gid, g["league"], g["date"], season)
-        if not result:
-            log.warning(f"    Could not store game {gid}")
+        # Fetch game detail from API
+        detail, subtitle = fetch_game_row(gid)
+        if not detail:
+            log.warning(f"    Could not fetch game {gid}")
             continue
 
-        home_id, away_id, home_name, away_name, iso_date, weekday = result
+        home_id = detail["home_id"]
+        away_id = detail["away_id"]
+        home_name = detail["home_name"]
+        away_name = detail["away_name"]
+        iso_date = g["date"]
 
-        # Goals + penalties
+        weekday_map = {0: "Mo", 1: "Di", 2: "Mi", 3: "Do", 4: "Fr", 5: "Sa", 6: "So"}
+        try:
+            weekday = weekday_map.get(datetime.strptime(iso_date, "%Y-%m-%d").weekday(), "")
+        except Exception:
+            weekday = ""
+
+        # Store game in SQLite
+        try:
+            conn.execute("""
+                INSERT OR IGNORE INTO games
+                  (game_id, home_team_id, away_team_id, home_team_raw, away_team_raw,
+                   date, weekday, time, season, league, result, location)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (gid, home_id, away_id, home_name, away_name,
+                  iso_date, weekday, detail["time"], season, g["league"],
+                  detail["result"], detail["location"]))
+            conn.commit()
+        except Exception as e:
+            log.warning(f"    Insert error for {gid}: {e}")
+            continue
+
+        # Fetch goals + penalties
         time.sleep(SLEEP)
-        ng, np = fetch_and_store_goals(conn, gid, home_id, away_id,
+        result = fetch_and_store_goals(conn, gid, home_id, away_id,
                                        home_name, away_name, iso_date, weekday, season)
+        ng, np = result if isinstance(result, tuple) else (0, 0)
         conn.commit()
         total_goals += ng
         total_pen += np
 
-        # Lineups
+        # Fetch lineups
         time.sleep(SLEEP)
         for is_home, tid, tname in [(0, away_id, away_name), (1, home_id, home_name)]:
             time.sleep(SLEEP)
@@ -281,7 +290,6 @@ def run():
     log.info(f"\n── Results ─────────────────")
     log.info(f"  Imported: {len(imported)} games, {total_goals} goals, {total_pen} penalties")
 
-    # 4. Sync to Supabase
     if imported:
         log.info("\n── Building name map…")
         conn.execute("DELETE FROM name_map")
