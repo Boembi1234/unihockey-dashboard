@@ -1188,7 +1188,7 @@ def sync_to_supabase(conn):
     ):
         if gid not in lineup_lookup:
             lineup_lookup[gid] = {"home_lineup": [], "away_lineup": []}
-        key = "home_lineup" if is_home else "away_lineup"
+        key = "away_lineup" if is_home else "home_lineup"
         lineup_lookup[gid][key].append(player)
 
     # ── Games ──────────────────────────────────────────────────────────
