@@ -106,6 +106,31 @@ def fetch_game_row(game_id):
     home_id = home_ids[0] if home_ids else 0
     away_id = away_ids[0] if away_ids else 0
 
+    # Parse phase and league_group from subtitle
+    subtitle = data.get("subtitle", "")
+    sub_lower = subtitle.lower()
+
+    # Detect phase
+    phase = "Qualifikation"
+    if "playoff" in sub_lower or "abstieg" in sub_lower or "superfinal" in sub_lower or "final" in sub_lower:
+        if "halbfinal" in sub_lower:
+            phase = "Halbfinal"
+        elif "viertelfinal" in sub_lower:
+            phase = "Viertelfinal"
+        elif "superfinal" in sub_lower:
+            phase = "Superfinal"
+        elif "final" in sub_lower and "halbfinal" not in sub_lower and "viertelfinal" not in sub_lower:
+            phase = "Final"
+        else:
+            phase = "Playoff"
+
+    # Detect league_group from subtitle (e.g. "Gruppe 1" or "Gruppe 2")
+    import re as _re
+    league_group = None
+    grp_match = _re.search(r'Gruppe\s+\d+', subtitle)
+    if grp_match:
+        league_group = grp_match.group(0)
+
     return {
         "home_id": home_id,
         "away_id": away_id,
@@ -114,7 +139,9 @@ def fetch_game_row(game_id):
         "result": result_text,
         "time": time_text,
         "location": location_text,
-    }, data.get("subtitle", "")
+        "phase": phase,
+        "league_group": league_group,
+    }, subtitle
 
 
 def sync_games_to_supabase(conn, game_ids):
@@ -258,11 +285,12 @@ def run():
             conn.execute("""
                 INSERT OR IGNORE INTO games
                   (game_id, home_team_id, away_team_id, home_team_raw, away_team_raw,
-                   date, weekday, time, season, league, result, location)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                   date, weekday, time, season, league, league_group, result, location, phase)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (gid, home_id, away_id, home_name, away_name,
                   iso_date, weekday, detail["time"], season, g["league"],
-                  detail["result"], detail["location"]))
+                  detail.get("league_group"), detail["result"], detail["location"],
+                  detail.get("phase", "Qualifikation")))
             conn.commit()
         except Exception as e:
             log.warning(f"    Insert error for {gid}: {e}")
