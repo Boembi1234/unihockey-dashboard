@@ -39,9 +39,14 @@ SLEEP     = 0.4
 # Full league list at the bottom of this file
 # ── TEST MODE: L-UPL + NLB + 1. Liga Gruppe 2 (2025). Restore FULL_LEAGUES below for full import. ──
 TARGET_LEAGUES = [
+    # ── L-UPL 2020-2025 full import ──
+    {"league": 24, "game_class": 11, "label": "Herren L-UPL", "seasons": [2025, 2024, 2023, 2022]},
+    {"league":  1, "game_class": 11, "label": "Herren NLA", "seasons": [2021, 2020]},
+]
+
+ALL_LEAGUES = [
     # ══════════════════════════════════════════════════════════════════
-    # Current season only — historical data already in Supabase
-    # Groups are auto-discovered from the API tabs structure
+    # Current season only — restore to TARGET_LEAGUES after test
     # ══════════════════════════════════════════════════════════════════
 
     # ── Herren Grossfeld ──
@@ -55,16 +60,16 @@ TARGET_LEAGUES = [
     # ── Herren Kleinfeld ──
     {"league":  3, "game_class": 12, "label": "Herren 1. Liga KF", "seasons": [2025]},
     {"league":  4, "game_class": 12, "label": "Herren 2. Liga KF", "seasons": [2025]},
-   
+
     # ── Damen Grossfeld ──
     {"league": 24, "game_class": 21, "label": "Damen L-UPL", "seasons": [2025]},
     {"league":  2, "game_class": 21, "label": "Damen NLB", "seasons": [2025]},
     {"league":  3, "game_class": 21, "label": "Damen 1. Liga", "seasons": [2025]},
-  
+
 
     # ── Damen Kleinfeld ──
     {"league":  3, "game_class": 22, "label": "Damen 1. Liga KF", "seasons": [2025]},
-   
+
     # ── Junioren A (national) ──
     {"league": 13, "game_class": 19, "label": "Junioren U21 A", "seasons": [2025]},
     {"league": 13, "game_class": 18, "label": "Junioren U18 A", "seasons": [2025]},
@@ -80,7 +85,6 @@ TARGET_LEAGUES = [
     # ── Juniorinnen ──
     {"league": 13, "game_class": 26, "label": "Juniorinnen U21 A", "seasons": [2025]},
     {"league": 13, "game_class": 28, "label": "Juniorinnen U17 A", "seasons": [2025]},
-
 ]
 
 # FULL_LEAGUES — uncomment and assign to TARGET_LEAGUES for full import:
@@ -142,7 +146,8 @@ CREATE TABLE IF NOT EXISTS games (
     date TEXT, weekday TEXT, time TEXT, season INTEGER,
     league TEXT, league_group TEXT, result TEXT,
     location TEXT, location_city TEXT,
-    phase TEXT DEFAULT 'Qualifikation'
+    phase TEXT DEFAULT 'Qualifikation',
+    subtitle TEXT
 );
 CREATE TABLE IF NOT EXISTS goals (
     goal_id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -751,13 +756,14 @@ def backfill_game_phases(conn):
                                 for gid in lnk.get('ids', []):
                                     gids_in_round.append(str(gid))
 
-                if gids_in_round and phase != 'Qualifikation':
+                if gids_in_round:
                     ph = ','.join('?' * len(gids_in_round))
                     conn.execute(
-                        f"UPDATE games SET phase=? WHERE game_id IN ({ph})",
-                        [phase] + gids_in_round
+                        f"UPDATE games SET phase=?, subtitle=? WHERE game_id IN ({ph})",
+                        [phase, label or None] + gids_in_round
                     )
-                    updated += len(gids_in_round)
+                    if phase != 'Qualifikation':
+                        updated += len(gids_in_round)
                     log.info(f"    [{repr(label)}] → {phase}: {len(gids_in_round)} games")
 
                 # Enqueue prev and next rounds
@@ -960,12 +966,31 @@ def backfill_lineups(conn):
 # LINEUP MAP — resolve abbreviated names to player IDs at import time
 # ══════════════════════════════════════════════════════════════════════
 
-def _make_abbrev(full_name):
-    """'Daniel Hasenbühler' → 'D. Hasenbühler'. Returns None if can't abbreviate."""
+def _make_abbrevs(full_name):
+    """Generate all possible abbreviation forms the API might use.
+    'Daniel Hasenbühler'        → ['D. Hasenbühler']
+    'Andrin Galante Carlström'  → ['A. Galante Carlström', 'A. Carlström']
+    'Daniels Janis Anis'        → ['D. Janis Anis', 'D. Anis']
+    'Yann Andrea Ruh'           → ['Y. Andrea Ruh', 'Y. Ruh']
+    'Rahul Chiplunkar'          → ['R. Chiplunkar', 'Ra. Chiplunkar']
+    Returns list of abbreviation strings."""
     parts = full_name.strip().split()
     if len(parts) < 2:
-        return None
-    return f"{parts[0][0]}. {parts[-1]}"
+        return []
+    first = parts[0]
+    rest = parts[1:]
+    abbrevs = []
+    # Full form: initial + everything after first name
+    abbrevs.append(f"{first[0]}. {' '.join(rest)}")
+    # Short form: initial + last word only (for multi-word names)
+    if len(rest) > 1:
+        abbrevs.append(f"{first[0]}. {rest[-1]}")
+    # Multi-char initial forms: "Ra.", "Ro." (API uses for disambiguation)
+    if len(first) >= 2:
+        abbrevs.append(f"{first[:2]}. {' '.join(rest)}")
+        if len(rest) > 1:
+            abbrevs.append(f"{first[:2]}. {rest[-1]}")
+    return abbrevs
 
 
 def build_lineup_map(conn, game_id, home_id, away_id, home_name, away_name, season, date):
@@ -1013,9 +1038,8 @@ def build_lineup_map(conn, game_id, home_id, away_id, home_name, away_name, seas
                 # Exact full name key
                 name_map[(player, team_name)] = (player, pid)
 
-                # Abbreviated key
-                abbrev = _make_abbrev(player)
-                if abbrev:
+                # All possible abbreviated forms
+                for abbrev in _make_abbrevs(player):
                     key = (abbrev, team_name)
                     if key in name_map:
                         if name_map[key][0] != player:

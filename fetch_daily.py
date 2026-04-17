@@ -291,12 +291,12 @@ def run():
             conn.execute("""
                 INSERT OR IGNORE INTO games
                   (game_id, home_team_id, away_team_id, home_team_raw, away_team_raw,
-                   date, weekday, time, season, league, league_group, result, location, phase)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   date, weekday, time, season, league, league_group, result, location, phase, subtitle)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (gid, home_id, away_id, home_name, away_name,
                   iso_date, weekday, detail["time"], season, g["league"],
                   detail.get("league_group"), detail["result"], detail["location"],
-                  detail.get("phase", "Qualifikation")))
+                  detail.get("phase", "Qualifikation"), subtitle))
             conn.commit()
         except Exception as e:
             log.warning(f"    Insert error for {gid}: {e}")
