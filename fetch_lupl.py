@@ -150,17 +150,22 @@ CREATE TABLE IF NOT EXISTS goals (
     team_scored_id   INTEGER, team_conceded_id  INTEGER,
     team_scored_raw  TEXT,    team_conceded_raw TEXT,
     scorer_raw TEXT, assist_raw TEXT,
+    scorer_id  INTEGER, assist_id  INTEGER,
+    scorer_name TEXT, assist_name TEXT,
     minute TEXT, minute_seconds INTEGER, period INTEGER,
     score_at_goal TEXT, date TEXT, weekday TEXT, season INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_goals_game   ON goals(game_id);
 CREATE INDEX IF NOT EXISTS idx_goals_scorer ON goals(scorer_raw);
+CREATE INDEX IF NOT EXISTS idx_goals_scorer_id ON goals(scorer_id);
+CREATE INDEX IF NOT EXISTS idx_goals_assist_id ON goals(assist_id);
 CREATE INDEX IF NOT EXISTS idx_games_season ON games(season);
 CREATE TABLE IF NOT EXISTS penalties (
     penalty_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     game_id        TEXT,
     team_id        INTEGER, team_raw       TEXT,
     player_raw     TEXT,
+    player_id      INTEGER, player_name    TEXT,
     minute         TEXT,    minute_seconds INTEGER, period INTEGER,
     duration_min   INTEGER, reason         TEXT,
     date TEXT, weekday TEXT, season INTEGER
@@ -575,7 +580,7 @@ def parse_penalty(event_raw):
 
 def fetch_and_store_goals(conn, game_id, home_id, away_id,
                           home_name, away_name, game_date, weekday, season,
-                          penalties_only=False):
+                          penalties_only=False, lineup_map=None):
     raw = api_get(f"game_events/{game_id}")
     if not raw:
         return 0
@@ -602,16 +607,25 @@ def fetch_and_store_goals(conn, game_id, home_id, away_id,
                 else:
                     scored_id, conceded_id = away_id, home_id
                     scored_raw, conceded_raw = away_name, home_name
+
+                # Resolve to player IDs via lineup map
+                scorer_name, scorer_pid = resolve_player(lineup_map, scorer, scored_raw)
+                assist_name, assist_pid = resolve_player(lineup_map, assist, scored_raw)
+
                 secs = minute_to_seconds(minute_raw)
                 conn.execute("""
                     INSERT INTO goals
                       (game_id, team_scored_id, team_conceded_id,
                        team_scored_raw, team_conceded_raw,
-                       scorer_raw, assist_raw, minute, minute_seconds,
+                       scorer_raw, assist_raw,
+                       scorer_id, assist_id, scorer_name, assist_name,
+                       minute, minute_seconds,
                        period, score_at_goal, date, weekday, season)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (game_id, scored_id, conceded_id, scored_raw, conceded_raw,
-                      scorer, assist, minute_raw, secs, seconds_to_period(secs),
+                      scorer, assist,
+                      scorer_pid, assist_pid, scorer_name, assist_name,
+                      minute_raw, secs, seconds_to_period(secs),
                       score_at_goal, game_date, weekday, season))
                 stored_goals += 1
 
@@ -621,14 +635,22 @@ def fetch_and_store_goals(conn, game_id, home_id, away_id,
                 if duration is None:
                     continue
                 pen_team_id = home_id if team_raw.strip() == home_name.strip() else away_id
+                pen_team_raw = team_raw.strip()
+                pen_player = player_raw.strip() or None
+
+                # Resolve penalty player to ID
+                pen_full_name, pen_pid = resolve_player(lineup_map, pen_player, pen_team_raw)
+
                 secs = minute_to_seconds(minute_raw)
                 conn.execute("""
                     INSERT INTO penalties
                       (game_id, team_id, team_raw, player_raw,
+                       player_id, player_name,
                        minute, minute_seconds, period,
                        duration_min, reason, date, weekday, season)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                """, (game_id, pen_team_id, team_raw.strip(), player_raw.strip() or None,
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (game_id, pen_team_id, pen_team_raw, pen_player,
+                      pen_pid, pen_full_name,
                       minute_raw, secs, seconds_to_period(secs),
                       duration, reason, game_date, weekday, season))
                 stored_pen += 1
@@ -933,6 +955,93 @@ def backfill_lineups(conn):
     conn.commit()
     log.info(f"  Lineup backfill complete: {total} player-game records stored.")
 
+
+# ══════════════════════════════════════════════════════════════════════
+# LINEUP MAP — resolve abbreviated names to player IDs at import time
+# ══════════════════════════════════════════════════════════════════════
+
+def _make_abbrev(full_name):
+    """'Daniel Hasenbühler' → 'D. Hasenbühler'. Returns None if can't abbreviate."""
+    parts = full_name.strip().split()
+    if len(parts) < 2:
+        return None
+    return f"{parts[0][0]}. {parts[-1]}"
+
+
+def build_lineup_map(conn, game_id, home_id, away_id, home_name, away_name, season, date):
+    """Fetch lineups for BOTH teams, store in SQLite, return name→ID map.
+
+    Returns dict: (abbrev_or_full, team_raw) → (full_name, player_id)
+    Collisions (same abbreviation, same team) are marked (None, None).
+    """
+    name_map = {}
+
+    for is_home, team_id, team_name in [(1, home_id, home_name), (0, away_id, away_name)]:
+        time.sleep(SLEEP)
+        raw = api_get(f"games/{game_id}/teams/{is_home}/players")
+        if not raw:
+            continue
+        for region in unwrap(raw).get("regions", []):
+            for row in region.get("rows", []):
+                cells = row.get("cells", [])
+                if len(cells) < 3:
+                    continue
+                jersey   = cell_text(cells[0]) or None
+                pos_list = cells[1].get("text", []) if isinstance(cells[1], dict) else []
+                position = next((p for p in pos_list if p), None)
+                player   = cell_text(cells[2]) or None
+                if not player:
+                    continue
+                pid = None
+                try:
+                    pid = cells[2].get("link", {}).get("ids", [None])[0]
+                except Exception:
+                    pass
+
+                # Store in SQLite lineups table
+                try:
+                    conn.execute("""
+                        INSERT OR IGNORE INTO lineups
+                          (game_id, team_id, team_raw, player_raw, player_id,
+                           jersey_number, position, season, date)
+                        VALUES (?,?,?,?,?,?,?,?,?)
+                    """, (game_id, team_id, team_name, player, pid,
+                          jersey, position, season, date))
+                except Exception:
+                    pass
+
+                # Exact full name key
+                name_map[(player, team_name)] = (player, pid)
+
+                # Abbreviated key
+                abbrev = _make_abbrev(player)
+                if abbrev:
+                    key = (abbrev, team_name)
+                    if key in name_map:
+                        if name_map[key][0] != player:
+                            name_map[key] = (None, None)  # collision
+                    else:
+                        name_map[key] = (player, pid)
+
+    return name_map
+
+
+def resolve_player(lineup_map, abbrev_name, team_raw):
+    """Look up abbreviated name → (full_name, player_id).
+    Tries team-scoped first, then any team (handles reversed team_ids)."""
+    if not abbrev_name or not lineup_map:
+        return None, None
+    # 1. Exact team match
+    entry = lineup_map.get((abbrev_name, team_raw))
+    if entry and entry[0]:
+        return entry
+    # 2. Fallback: any team in the game
+    for (name, _team), (full, pid) in lineup_map.items():
+        if name == abbrev_name and full:
+            return full, pid
+    return None, None
+
+
 # ══════════════════════════════════════════════════════════════════════
 # EXPORT data.json (dashboard-compatible)
 # ══════════════════════════════════════════════════════════════════════
@@ -1161,24 +1270,6 @@ def sync_to_supabase(conn):
     }
     def nl(name): return LEAGUE_MAP_LOCAL.get(name, name) if name else name
 
-    # Load name map
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(name_map)")}
-    abbrev_team_to_full = {}
-    if "team_raw" in cols:
-        for abbrev, team, full in conn.execute(
-            "SELECT abbrev_name, team_raw, full_name FROM name_map"
-        ):
-            abbrev_team_to_full[(abbrev, team)] = full
-    else:
-        for abbrev, full in conn.execute("SELECT abbrev_name, full_name FROM name_map"):
-            abbrev_team_to_full[(abbrev, None)] = full
-
-    def resolve(abbrev, team_raw):
-        if not abbrev: return None
-        return (abbrev_team_to_full.get((abbrev, team_raw))
-                or abbrev_team_to_full.get((abbrev, None))
-                or abbrev)
-
     # ── Build lineup lookup: game_id → { home_lineup: [...], away_lineup: [...] }
     lineup_lookup = {}
     for gid, tid, player, is_home in conn.execute(
@@ -1201,11 +1292,12 @@ def sync_to_supabase(conn):
         _sb_upsert("fb_games", batch)
     log.info(f"    fb_games: {len(games)} rows synced ({len(lineup_lookup)} with lineups)")
 
-    # ── Goals ──────────────────────────────────────────────────────────
+    # ── Goals (scorer_name/assist_name now stored directly in SQLite) ──
     GOAL_COLS = [
         "game_id", "team_scored_id", "team_conceded_id", "team_scored_raw",
-        "team_conceded_raw", "scorer_raw", "assist_raw", "scorer_name",
-        "assist_name", "minute", "minute_seconds", "period", "score_at_goal",
+        "team_conceded_raw", "scorer_raw", "assist_raw",
+        "scorer_id", "assist_id", "scorer_name", "assist_name",
+        "minute", "minute_seconds", "period", "score_at_goal",
         "date", "season", "league", "league_group", "home_team_raw",
         "away_team_raw", "home_team_id", "away_team_id",
     ]
@@ -1217,9 +1309,6 @@ def sync_to_supabase(conn):
     """):
         raw = dict(r)
         raw["league"] = nl(raw.get("league"))
-        t = raw.get("team_scored_raw", "")
-        raw["scorer_name"] = resolve(raw.get("scorer_raw"), t)
-        raw["assist_name"]  = resolve(raw.get("assist_raw"),  t)
         goal_rows.append({c: raw.get(c) for c in GOAL_COLS})
     for batch in _batched(goal_rows, 500):
         _sb_upsert("fb_goals", batch)
@@ -1227,9 +1316,10 @@ def sync_to_supabase(conn):
 
     # ── Penalties ──────────────────────────────────────────────────────
     PEN_COLS = [
-        "game_id", "team_id", "team_raw", "player_raw", "minute",
-        "minute_seconds", "period", "duration_min", "reason", "date",
-        "season", "league", "home_team_raw", "away_team_raw",
+        "game_id", "team_id", "team_raw", "player_raw",
+        "player_id", "player_name",
+        "minute", "minute_seconds", "period", "duration_min", "reason",
+        "date", "season", "league", "home_team_raw", "away_team_raw",
         "home_team_id", "away_team_id",
     ]
     pen_rows = []
@@ -1245,76 +1335,25 @@ def sync_to_supabase(conn):
         _sb_upsert("fb_penalties", batch)
     log.info(f"    fb_penalties: {len(pen_rows)} rows synced")
 
-    # ── Player meta ────────────────────────────────────────────────────
-    pos_map = {}
-    for name, pos in conn.execute("""
-        SELECT player_raw, position FROM lineups WHERE position IS NOT NULL
-        GROUP BY player_raw, position ORDER BY player_raw, COUNT(*) DESC
+    # ── Players (unique players from lineups) ─────────────────────────
+    player_rows = []
+    for row in conn.execute("""
+        SELECT player_id, player_raw, position,
+               COUNT(*) as gp
+        FROM lineups
+        WHERE player_id IS NOT NULL
+        GROUP BY player_id
     """):
-        pos_map.setdefault(name, pos)
-
-    gp_total = {n: g for n, g in conn.execute(
-        "SELECT player_raw, COUNT(*) FROM lineups GROUP BY player_raw")}
-    gp_seasons = {}
-    for name, season, gp in conn.execute(
-        "SELECT player_raw, season, COUNT(*) FROM lineups GROUP BY player_raw, season"
-    ):
-        gp_seasons.setdefault(name, {})[str(season)] = gp
-
-    player_game_ids = {}
-    for name, gid in conn.execute(
-        "SELECT player_raw, game_id FROM lineups ORDER BY date, game_id"
-    ):
-        player_game_ids.setdefault(name, []).append(gid)
-
-    player_ids = {}
-    for name, pid in conn.execute(
-        "SELECT player_raw, player_id FROM lineups WHERE player_id IS NOT NULL"
-        " GROUP BY player_raw ORDER BY season DESC"
-    ):
-        player_ids.setdefault(name, pid)
-
-    team_game_ids = {}
-    for scorer, assist, game_id, team_raw in conn.execute(
-        "SELECT scorer_raw, assist_raw, game_id, team_scored_raw FROM goals"
-        " WHERE team_scored_raw IS NOT NULL"
-    ):
-        for abbrev in (scorer, assist):
-            if not abbrev: continue
-            full = (abbrev_team_to_full.get((abbrev, team_raw))
-                    or abbrev_team_to_full.get((abbrev, None)) or abbrev)
-            team_game_ids.setdefault(full, {}).setdefault(team_raw, set()).add(game_id)
-
-    # Compute total goals/assists from goals table
-    total_goals = {}
-    total_assists = {}
-    for scorer, assist in conn.execute("SELECT scorer_raw, assist_raw FROM goals"):
-        s_full = (abbrev_team_to_full.get((scorer, None)) or scorer) if scorer else None
-        a_full = (abbrev_team_to_full.get((assist, None)) or assist) if assist else None
-        if s_full: total_goals[s_full] = total_goals.get(s_full, 0) + 1
-        if a_full: total_assists[a_full] = total_assists.get(a_full, 0) + 1
-
-    meta_rows = []
-    for name in set(list(gp_total.keys()) + list(pos_map.keys())):
-        raw_th = team_game_ids.get(name, {})
-        team_gp = {t: len(gs) for t, gs in sorted(raw_th.items(), key=lambda x: -len(x[1]))}
-        g = total_goals.get(name, 0)
-        a = total_assists.get(name, 0)
-        meta_rows.append({
-            "player_name": name,
-            "pos":  pos_map.get(name),
-            "gp":   gp_total.get(name, 0),
-            "pid":  player_ids.get(name),
-            "team_gp": team_gp,
-            "gp_s":    gp_seasons.get(name, {}),
-            "gids":    player_game_ids.get(name, []),
-            "total_goals": g,
-            "total_assists": a,
-            "total_points": g + a,
+        player_rows.append({
+            "player_id": row[0],
+            "player_name": row[1],
+            "position": row[2],
+            "games_played": row[3],
         })
-    for batch in _batched(meta_rows, 500):
-        _sb_upsert("fb_player_meta", batch)
-    log.info(f"    fb_player_meta: {len(meta_rows)} rows synced")
+    if player_rows:
+        for batch in _batched(player_rows, 500):
+            _sb_upsert("fb_players", batch)
+    log.info(f"    fb_players: {len(player_rows)} rows synced")
     log.info("  ✅ Supabase sync complete.")
 
 
@@ -1371,20 +1410,21 @@ def run():
                         continue
 
                     home_id, away_id, home_name, away_name, iso_date, weekday = result
+
+                    # Fetch lineups FIRST → build name→ID map
+                    lineup_map = build_lineup_map(conn, gid, home_id, away_id,
+                                                   home_name, away_name, season, iso_date)
+
+                    # Then fetch goals/penalties with ID resolution
                     time.sleep(SLEEP)
                     ng, np = fetch_and_store_goals(conn, gid, home_id, away_id,
-                                                   home_name, away_name, iso_date, weekday, season)
+                                                   home_name, away_name, iso_date, weekday, season,
+                                                   lineup_map=lineup_map)
                     conn.commit()
                     total_games += 1
                     total_goals += ng
                     total_pen   += np
-                    # also fetch lineups for the new game
-                    time.sleep(SLEEP)
-                    for is_home, tid, tname in [(0, away_id, away_name), (1, home_id, home_name)]:
-                        time.sleep(SLEEP)
-                        fetch_and_store_lineup(conn, gid, tid, is_home, tname, season, iso_date)
-                    conn.commit()
-                    log.info(f"  ✓ {home_name} vs {away_name}  [{iso_date}]  {ng} goals  {np} pen")
+                    log.info(f"  ✓ {home_name} vs {away_name}  [{iso_date}]  {ng} goals  {np} pen  ({len(lineup_map)} players)")
 
     log.info(f"\n── New games ─────────────────")
     log.info(f"  Games stored: {total_games}")
@@ -1396,8 +1436,6 @@ def run():
     backfill_lineups(conn)
     log.info(f"\n── Backfilling game phases (Qualifikation/Playoffs)…")
     backfill_game_phases(conn)
-    log.info(f"\n── Building name map…")
-    build_name_map(conn)
     log.info(f"\n── Syncing to Supabase…")
     sync_to_supabase(conn)
     conn.close()

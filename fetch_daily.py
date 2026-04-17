@@ -14,8 +14,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import requests
 from fetch_lupl import (
-    get_db, store_game, fetch_and_store_goals, fetch_and_store_lineup,
-    build_name_map, api_get, unwrap, SLEEP,
+    get_db, store_game, fetch_and_store_goals,
+    build_lineup_map, api_get, unwrap, SLEEP,
     SUPABASE_URL, SUPABASE_SERVICE_KEY,
     _sb_upsert, _batched,
 )
@@ -152,17 +152,6 @@ def sync_games_to_supabase(conn, game_ids):
     LEAGUE_MAP = {"Herren L-UPL": "Herren NLA", "Herren SML": "Herren NLA"}
     def nl(name): return LEAGUE_MAP.get(name, name) if name else name
 
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(name_map)")}
-    name_lookup = {}
-    if "team_raw" in cols:
-        for abbrev, team, full in conn.execute("SELECT abbrev_name, team_raw, full_name FROM name_map"):
-            name_lookup[(abbrev, team)] = full
-
-    def resolve(abbrev, team_raw):
-        if not abbrev:
-            return None
-        return name_lookup.get((abbrev, team_raw)) or name_lookup.get((abbrev, None)) or abbrev
-
     ph = ",".join("?" * len(game_ids))
 
     # Lineups — swap because API stores with reversed team_ids
@@ -188,11 +177,12 @@ def sync_games_to_supabase(conn, game_ids):
         _sb_upsert("fb_games", games)
     log.info(f"    fb_games: {len(games)} rows")
 
-    # Goals
+    # Goals — scorer_name/assist_name/scorer_id/assist_id come from SQLite directly
     GOAL_COLS = [
         "game_id", "team_scored_id", "team_conceded_id", "team_scored_raw",
-        "team_conceded_raw", "scorer_raw", "assist_raw", "scorer_name",
-        "assist_name", "minute", "minute_seconds", "period", "score_at_goal",
+        "team_conceded_raw", "scorer_raw", "assist_raw",
+        "scorer_id", "assist_id", "scorer_name", "assist_name",
+        "minute", "minute_seconds", "period", "score_at_goal",
         "date", "season", "league", "league_group", "home_team_raw",
         "away_team_raw", "home_team_id", "away_team_id",
     ]
@@ -205,19 +195,18 @@ def sync_games_to_supabase(conn, game_ids):
     """, game_ids):
         raw = dict(r)
         raw["league"] = nl(raw.get("league"))
-        raw["scorer_name"] = resolve(raw.get("scorer_raw"), raw.get("team_scored_raw", ""))
-        raw["assist_name"] = resolve(raw.get("assist_raw"), raw.get("team_scored_raw", ""))
         goal_rows.append({c: raw.get(c) for c in GOAL_COLS})
     if goal_rows:
         _sb_upsert("fb_goals", goal_rows)
     log.info(f"    fb_goals: {len(goal_rows)} rows")
 
-    # Penalties
+    # Penalties — player_id/player_name come from SQLite directly
     PEN_COLS = [
-        "game_id", "team_id", "team_raw", "player_raw", "minute",
-        "minute_seconds", "period", "duration_min", "reason", "date",
-        "season", "league", "home_team_raw", "away_team_raw",
-        "home_team_id", "away_team_id", "player_name",
+        "game_id", "team_id", "team_raw", "player_raw",
+        "player_id", "player_name",
+        "minute", "minute_seconds", "period", "duration_min", "reason",
+        "date", "season", "league", "home_team_raw", "away_team_raw",
+        "home_team_id", "away_team_id",
     ]
     pen_rows = []
     for r in conn.execute(f"""
@@ -228,11 +217,28 @@ def sync_games_to_supabase(conn, game_ids):
     """, game_ids):
         raw = dict(r)
         raw["league"] = nl(raw.get("league"))
-        raw["player_name"] = resolve(raw.get("player_raw"), raw.get("team_raw", ""))
         pen_rows.append({c: raw.get(c) for c in PEN_COLS})
     if pen_rows:
         _sb_upsert("fb_penalties", pen_rows)
     log.info(f"    fb_penalties: {len(pen_rows)} rows")
+
+    # Players — sync unique players from lineups for imported games
+    player_rows = []
+    for row in conn.execute(f"""
+        SELECT player_id, player_raw, position, COUNT(*) as gp
+        FROM lineups
+        WHERE player_id IS NOT NULL AND game_id IN ({ph})
+        GROUP BY player_id
+    """, game_ids):
+        player_rows.append({
+            "player_id": row[0],
+            "player_name": row[1],
+            "position": row[2],
+            "games_played": row[3],
+        })
+    if player_rows:
+        _sb_upsert("fb_players", player_rows)
+    log.info(f"    fb_players: {len(player_rows)} rows")
 
 
 def run():
@@ -296,21 +302,20 @@ def run():
             log.warning(f"    Insert error for {gid}: {e}")
             continue
 
-        # Fetch goals + penalties
+        # Fetch lineups FIRST → build name→ID map
+        lineup_map = build_lineup_map(conn, gid, home_id, away_id,
+                                       home_name, away_name, season, iso_date)
+        conn.commit()
+
+        # Fetch goals + penalties with ID resolution
         time.sleep(SLEEP)
         result = fetch_and_store_goals(conn, gid, home_id, away_id,
-                                       home_name, away_name, iso_date, weekday, season)
+                                       home_name, away_name, iso_date, weekday, season,
+                                       lineup_map=lineup_map)
         ng, np = result if isinstance(result, tuple) else (0, 0)
         conn.commit()
         total_goals += ng
         total_pen += np
-
-        # Fetch lineups
-        time.sleep(SLEEP)
-        for is_home, tid, tname in [(0, away_id, away_name), (1, home_id, home_name)]:
-            time.sleep(SLEEP)
-            fetch_and_store_lineup(conn, gid, tid, is_home, tname, season, iso_date)
-        conn.commit()
 
         imported.append(gid)
         log.info(f"    ✓ {home_name} vs {away_name} [{iso_date}] {ng}G {np}P ({g['league']})")
@@ -319,11 +324,6 @@ def run():
     log.info(f"  Imported: {len(imported)} games, {total_goals} goals, {total_pen} penalties")
 
     if imported:
-        log.info("\n── Building name map…")
-        conn.execute("DELETE FROM name_map")
-        conn.commit()
-        build_name_map(conn)
-
         log.info("\n── Syncing to Supabase…")
         sync_games_to_supabase(conn, imported)
 
