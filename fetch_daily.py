@@ -154,18 +154,18 @@ def sync_games_to_supabase(conn, game_ids):
 
     ph = ",".join("?" * len(game_ids))
 
-    # Lineups — swap because API stores with reversed team_ids
+    # Lineups — store player_ids, swap because API stores with reversed team_ids
     lineup_lookup = {}
-    for gid, tid, player, is_home in conn.execute(
-        f"SELECT l.game_id, l.team_id, l.player_raw, "
+    for gid, pid, is_home in conn.execute(
+        f"SELECT l.game_id, l.player_id, "
         f"  CASE WHEN l.team_id = g.home_team_id THEN 1 ELSE 0 END as is_home "
         f"FROM lineups l JOIN games g ON l.game_id = g.game_id "
-        f"WHERE g.game_id IN ({ph})", game_ids
+        f"WHERE l.player_id IS NOT NULL AND g.game_id IN ({ph})", game_ids
     ):
         if gid not in lineup_lookup:
             lineup_lookup[gid] = {"home_lineup": [], "away_lineup": []}
         key = "away_lineup" if is_home else "home_lineup"
-        lineup_lookup[gid][key].append(player)
+        lineup_lookup[gid][key].append(pid)
 
     # Games
     games = [dict(r) for r in conn.execute(f"SELECT * FROM games WHERE game_id IN ({ph})", game_ids)]

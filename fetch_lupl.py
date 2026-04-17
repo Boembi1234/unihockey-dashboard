@@ -985,11 +985,11 @@ def _make_abbrevs(full_name):
     # Short form: initial + last word only (for multi-word names)
     if len(rest) > 1:
         abbrevs.append(f"{first[0]}. {rest[-1]}")
-    # Multi-char initial forms: "Ra.", "Ro." (API uses for disambiguation)
-    if len(first) >= 2:
-        abbrevs.append(f"{first[:2]}. {' '.join(rest)}")
+    # Multi-char initial forms: "Ra.", "Ro.", "Matt.", "Math." (API uses for disambiguation)
+    for length in range(2, min(len(first), 5) + 1):
+        abbrevs.append(f"{first[:length]}. {' '.join(rest)}")
         if len(rest) > 1:
-            abbrevs.append(f"{first[:2]}. {rest[-1]}")
+            abbrevs.append(f"{first[:length]}. {rest[-1]}")
     return abbrevs
 
 
@@ -1294,17 +1294,18 @@ def sync_to_supabase(conn):
     }
     def nl(name): return LEAGUE_MAP_LOCAL.get(name, name) if name else name
 
-    # ── Build lineup lookup: game_id → { home_lineup: [...], away_lineup: [...] }
+    # ── Build lineup lookup: game_id → { home_lineup: [pid,...], away_lineup: [pid,...] }
     lineup_lookup = {}
-    for gid, tid, player, is_home in conn.execute(
-        "SELECT l.game_id, l.team_id, l.player_raw, "
+    for gid, pid, is_home in conn.execute(
+        "SELECT l.game_id, l.player_id, "
         "  CASE WHEN l.team_id = g.home_team_id THEN 1 ELSE 0 END as is_home "
-        "FROM lineups l JOIN games g ON l.game_id = g.game_id"
+        "FROM lineups l JOIN games g ON l.game_id = g.game_id "
+        "WHERE l.player_id IS NOT NULL"
     ):
         if gid not in lineup_lookup:
             lineup_lookup[gid] = {"home_lineup": [], "away_lineup": []}
         key = "away_lineup" if is_home else "home_lineup"
-        lineup_lookup[gid][key].append(player)
+        lineup_lookup[gid][key].append(pid)
 
     # ── Games ──────────────────────────────────────────────────────────
     games = [dict(r) for r in conn.execute("SELECT * FROM games ORDER BY date")]
