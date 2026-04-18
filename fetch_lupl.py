@@ -166,8 +166,6 @@ CREATE TABLE IF NOT EXISTS goals (
 );
 CREATE INDEX IF NOT EXISTS idx_goals_game   ON goals(game_id);
 CREATE INDEX IF NOT EXISTS idx_goals_scorer ON goals(scorer_raw);
-CREATE INDEX IF NOT EXISTS idx_goals_scorer_id ON goals(scorer_id);
-CREATE INDEX IF NOT EXISTS idx_goals_assist_id ON goals(assist_id);
 CREATE INDEX IF NOT EXISTS idx_games_season ON games(season);
 CREATE TABLE IF NOT EXISTS penalties (
     penalty_id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -345,6 +343,15 @@ def get_db():
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
         except Exception:
             pass  # column already exists
+    # Create indexes on new columns (safe after migration)
+    for idx_sql in [
+        "CREATE INDEX IF NOT EXISTS idx_goals_scorer_id ON goals(scorer_id)",
+        "CREATE INDEX IF NOT EXISTS idx_goals_assist_id ON goals(assist_id)",
+    ]:
+        try:
+            conn.execute(idx_sql)
+        except Exception:
+            pass
     conn.commit()
     return conn
 
