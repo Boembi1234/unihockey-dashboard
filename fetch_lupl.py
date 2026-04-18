@@ -39,9 +39,13 @@ SLEEP     = 0.4
 # Full league list at the bottom of this file
 # ── TEST MODE: L-UPL + NLB + 1. Liga Gruppe 2 (2025). Restore FULL_LEAGUES below for full import. ──
 TARGET_LEAGUES = [
-    # ── L-UPL 2020-2025 full import ──
-    {"league": 24, "game_class": 11, "label": "Herren L-UPL", "seasons": [2025, 2024, 2023, 2022]},
-    {"league":  1, "game_class": 11, "label": "Herren NLA", "seasons": [2021, 2020]},
+    # ── Damen L-UPL / NLA full historical import ──
+    {"league": 24, "game_class": 21, "label": "Damen L-UPL", "seasons": [2025, 2024, 2023, 2022]},
+    {"league":  1, "game_class": 21, "label": "Damen NLA",
+     "seasons": [2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013]},
+    {"league": 10, "game_class": 21, "label": "Damen NLA",
+     "seasons": [2012, 2011, 2010, 2009, 2008, 2007]},
+    {"league":  1, "game_class": 21, "label": "Damen NLA", "seasons": [2006, 2005]},
 ]
 
 ALL_LEAGUES = [
@@ -325,6 +329,22 @@ def get_db():
         conn.execute("DROP TABLE IF EXISTS name_map")
         conn.commit()
     conn.executescript(SCHEMA)
+    conn.commit()
+    # Migrate: add new columns to existing tables (safe if already present)
+    migrations = [
+        ("goals", "scorer_id", "INTEGER"),
+        ("goals", "assist_id", "INTEGER"),
+        ("goals", "scorer_name", "TEXT"),
+        ("goals", "assist_name", "TEXT"),
+        ("penalties", "player_id", "INTEGER"),
+        ("penalties", "player_name", "TEXT"),
+        ("games", "subtitle", "TEXT"),
+    ]
+    for table, col, typ in migrations:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+        except Exception:
+            pass  # column already exists
     conn.commit()
     return conn
 
@@ -673,11 +693,19 @@ def phase_from_label(label):
     low = label.lower()
     if 'superfinal' in low:
         return 'Superfinal'
-    if 'final' in low and 'halb' in low:
+    if '1/2' in low and ('play' in low or 'final' in low):
         return 'Halbfinal'
-    if 'final' in low and 'viertel' in low:
+    if ('halb' in low and 'final' in low):
+        return 'Halbfinal'
+    if '1/4' in low and ('play' in low or 'final' in low):
         return 'Viertelfinal'
-    if 'playoff' in low or 'final' in low:
+    if 'viertel' in low and 'final' in low:
+        return 'Viertelfinal'
+    if 'playout' in low or 'play-out' in low:
+        return 'Playout'
+    if 'abstieg' in low:
+        return 'Playout'
+    if 'playoff' in low or 'play-off' in low or 'final' in low:
         return 'Playoff'
     return 'Qualifikation'
 
@@ -1268,7 +1296,10 @@ def _sb_upsert(table, rows):
     if not rows:
         return
     url = f"{SUPABASE_URL}/rest/v1/{table}"
-    r = SESSION.post(url, headers=_sb_headers(),
+    headers = _sb_headers()
+    # Use upsert (INSERT ... ON CONFLICT DO UPDATE) to avoid duplicates
+    headers["Prefer"] = "resolution=merge-duplicates"
+    r = SESSION.post(url, headers=headers,
                      data=json.dumps(rows, default=str))
     if r.status_code not in (200, 201):
         log.error(f"  Supabase {table} failed [{r.status_code}]: {r.text[:300]}")
