@@ -39,13 +39,18 @@ SLEEP     = 0.4
 # Full league list at the bottom of this file
 # ── TEST MODE: L-UPL + NLB + 1. Liga Gruppe 2 (2025). Restore FULL_LEAGUES below for full import. ──
 TARGET_LEAGUES = [
-    # ── Damen L-UPL / NLA full historical import ──
-    {"league": 24, "game_class": 21, "label": "Damen L-UPL", "seasons": [2025, 2024, 2023, 2022]},
-    {"league":  1, "game_class": 21, "label": "Damen NLA",
-     "seasons": [2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013]},
-    {"league": 10, "game_class": 21, "label": "Damen NLA",
-     "seasons": [2012, 2011, 2010, 2009, 2008, 2007]},
-    {"league":  1, "game_class": 21, "label": "Damen NLA", "seasons": [2006, 2005]},
+    # ── Junioren U21 A 2006-2025 ──
+    {"league": 13, "game_class": 19, "label": "Junioren U21 A",
+     "seasons": [2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016,
+                 2015, 2014, 2013, 2012, 2011, 2010, 2009, 2008, 2007, 2006]},
+    # ── Junioren U21 B 2006-2025 ──
+    {"league": 14, "game_class": 19, "label": "Junioren U21 B",
+     "seasons": [2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016,
+                 2015, 2014, 2013, 2012, 2011, 2010, 2009, 2008, 2007, 2006]},
+    # ── Juniorinnen U21 A 2010-2025 ──
+    {"league": 13, "game_class": 26, "label": "Juniorinnen U21 A",
+     "seasons": [2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016,
+                 2015, 2014, 2013, 2012, 2011, 2010]},
 ]
 
 ALL_LEAGUES = [

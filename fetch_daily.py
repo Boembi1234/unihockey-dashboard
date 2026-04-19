@@ -43,6 +43,7 @@ def get_cached_games():
         log.error(f"Cache fetch failed: {r.status_code}")
         return []
 
+    seen = set()
     games = []
     for row in r.json():
         payload = row.get("data")
@@ -53,14 +54,18 @@ def get_cached_games():
         for league in payload.get("leagues", []):
             league_name = league.get("league", "")
             for g in league.get("games", []):
+                gid = str(g.get("id", ""))
+                if not gid or gid in seen:
+                    continue
                 t = g.get("time", "")
                 result = g.get("result", "")
                 if "beendet" not in t.lower():
                     continue
                 if not result or result in ("-:-", "-", ""):
                     continue
+                seen.add(gid)
                 games.append({
-                    "id": str(g["id"]),
+                    "id": gid,
                     "league": league_name,
                     "date": g.get("date", row.get("game_date", "")),
                 })
