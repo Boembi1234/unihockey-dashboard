@@ -90,6 +90,10 @@ def fetch_game_row(game_id):
         if idx is None or idx >= len(cells):
             return None, []
         c = cells[idx]
+        if isinstance(c, str):
+            return c, []
+        if not isinstance(c, dict):
+            return str(c) if c else None, []
         text = c.get("text", [None])[0] if c.get("text") else None
         ids = c.get("link", {}).get("ids", [])
         return text, ids
