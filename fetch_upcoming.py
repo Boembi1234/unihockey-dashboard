@@ -78,18 +78,34 @@ def team_hash(name):
 
 def parse_date(s):
     if not s:
-        return None
+        return None, None
     s = s.strip().split(" ")[0]
     relative = {"heute": 0, "gestern": -1, "morgen": 1}
     if s.lower() in relative:
         d = date.today() + timedelta(days=relative[s.lower()])
-        return d.isoformat()
+        return d.isoformat(), d.strftime("%A")
     for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
         try:
-            return datetime.strptime(s, fmt).date().isoformat()
+            d = datetime.strptime(s, fmt).date()
+            return d.isoformat(), d.strftime("%A")
         except ValueError:
             pass
-    return None
+    return None, None
+
+
+def phase_from_label(label):
+    if not label:
+        return "Qualifikation"
+    low = label.lower()
+    if "final" in low and "viertel" in low:
+        return "Playoff-Viertelfinal"
+    if "halbfinal" in low or "semi" in low:
+        return "Playoff-Halbfinal"
+    if "final" in low:
+        return "Playoff-Final"
+    if "playoff" in low or "play-off" in low:
+        return "Playoffs"
+    return "Qualifikation"
 
 
 def norm_league(name):
@@ -149,6 +165,11 @@ def fetch_upcoming_games(league_id, game_class, season, group=None):
         data = raw.get("data", raw) if isinstance(raw, dict) else {}
         regions = data.get("regions", [])
 
+        slider = data.get("slider", {})
+        round_label = slider.get("text", "") or ""
+        phase = phase_from_label(round_label)
+        subtitle = round_label or None
+
         for region in regions:
             region_title = (region.get("title") or region.get("text") or "").strip()
             for row in region.get("rows", []):
@@ -164,7 +185,7 @@ def fetch_upcoming_games(league_id, game_class, season, group=None):
                 if not gid:
                     continue
 
-                game = parse_game_row(gid, cells, season, region_title, group)
+                game = parse_game_row(gid, cells, season, region_title, group, subtitle, phase)
                 if not game:
                     continue
 
@@ -181,7 +202,6 @@ def fetch_upcoming_games(league_id, game_class, season, group=None):
                     games.append(game)
 
         # Navigate forward to get the next round
-        slider = data.get("slider", {})
         nxt = slider.get("next", {}).get("set_in_context", {}).get("round")
         if nxt and nxt not in visited:
             visited.add(nxt)
@@ -193,7 +213,7 @@ def fetch_upcoming_games(league_id, game_class, season, group=None):
     return games
 
 
-def parse_game_row(game_id, cells, season, region_title, group_override):
+def parse_game_row(game_id, cells, season, region_title, group_override, subtitle=None, phase=None):
     """Parse a game row from the API into a dict matching the fb_games schema."""
     if len(cells) >= 8:
         # New API layout
@@ -231,7 +251,7 @@ def parse_game_row(game_id, cells, season, region_title, group_override):
     else:
         return None
 
-    iso_date = parse_date(date_raw)
+    iso_date, weekday = parse_date(date_raw)
     if not iso_date:
         return None
 
@@ -248,12 +268,15 @@ def parse_game_row(game_id, cells, season, region_title, group_override):
         "home_team_raw": home_name,
         "away_team_raw": away_name,
         "date":          iso_date,
+        "weekday":       weekday or None,
         "time":          time_raw or None,
         "season":        season,
         "result":        result,
         "location":      loc_raw or None,
         "location_city": loc_city or None,
         "league_group":  league_group or None,
+        "subtitle":      subtitle,
+        "phase":         phase or "Qualifikation",
     }
 
 
