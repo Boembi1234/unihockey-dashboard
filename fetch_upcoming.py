@@ -27,10 +27,10 @@ CURRENT_SEASON = 2025
 
 LEAGUES = [
     {"league": 24, "game_class": 11, "label": "Herren L-UPL",   "group": None},
-    {"league":  1, "game_class": 11, "label": "Herren NLA",     "group": None},
     {"league":  2, "game_class": 11, "label": "Herren NLB",     "group": None},
     {"league":  3, "game_class": 11, "label": "Herren 1. Liga", "group": "Gruppe 1"},
     {"league":  3, "game_class": 11, "label": "Herren 1. Liga", "group": "Gruppe 2"},
+    {"league": 24, "game_class": 21, "label": "Damen L-UPL",    "group": None},
 ]
 
 LEAGUE_MAP = {
