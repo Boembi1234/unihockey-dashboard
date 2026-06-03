@@ -1,12 +1,12 @@
-"""Fetch upcoming games (next 7 days) for all tracked leagues and push to Supabase.
-
-Only fetches the current/latest round from the API (no full-history crawl),
-parses game rows, keeps those within the next 7 days, and upserts them into
-the fb_games table.  Games without a final result get result = NULL so they
-don't affect historical stats (which filter for valid results).
+"""Fetch upcoming games (next 7 days) for all tracked leagues + Mobiliar Cup,
+push to Supabase.
 
 Run daily via GitHub Actions or manually:
     SUPABASE_SERVICE_KEY=... python fetch_upcoming.py
+
+One-off discovery (prints which (league, game_class) combinations actually
+return rows, so you can verify the LEAGUES list against the real API):
+    SUPABASE_SERVICE_KEY=... python fetch_upcoming.py --discover
 """
 
 import os, sys, json, time, re, logging, requests
@@ -25,18 +25,51 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 SLEEP = 0.4
 CURRENT_SEASON = 2025
 
+# Each row = one API query.
+#   league / game_class : numeric IDs in the SwissUnihockey API
+#   group               : optional Gruppe filter (some divisions are split)
+#   mode                : defaults to "list"; cup competitions use "cup"
+#   label               : human-readable name written to fb_games.league
+#
+# IDs marked ✅ are verified against your prior version. Others (2.-5. Liga,
+# Damen NLB/1.-3. Liga, Cup) are extrapolated from the API's numbering
+# pattern. Run `python fetch_upcoming.py --discover` to confirm — anything
+# returning 0 rows is wrong and needs the real ID.
 LEAGUES = [
-    {"league": 24, "game_class": 11, "label": "Herren L-UPL",   "group": None},
-    {"league":  2, "game_class": 11, "label": "Herren NLB",     "group": None},
-    {"league":  3, "game_class": 11, "label": "Herren 1. Liga", "group": "Gruppe 1"},
-    {"league":  3, "game_class": 11, "label": "Herren 1. Liga", "group": "Gruppe 2"},
-    {"league": 24, "game_class": 21, "label": "Damen L-UPL",    "group": None},
+    # ── Herren Senior ─────────────────────────────────────────────────
+    {"league": 24, "game_class": 11, "label": "Herren L-UPL",   "group": None},          # ✅
+    {"league":  2, "game_class": 11, "label": "Herren NLB",     "group": None},          # ✅
+    {"league":  3, "game_class": 11, "label": "Herren 1. Liga", "group": "Gruppe 1"},     # ✅
+    {"league":  3, "game_class": 11, "label": "Herren 1. Liga", "group": "Gruppe 2"},     # ✅
+    {"league":  4, "game_class": 11, "label": "Herren 2. Liga", "group": None},           # verify
+    {"league":  5, "game_class": 11, "label": "Herren 3. Liga", "group": None},           # verify
+    {"league":  6, "game_class": 11, "label": "Herren 4. Liga", "group": None},           # verify
+    {"league":  7, "game_class": 11, "label": "Herren 5. Liga", "group": None},           # verify
+
+    # ── Damen Senior ──────────────────────────────────────────────────
+    {"league": 24, "game_class": 21, "label": "Damen L-UPL",    "group": None},           # ✅
+    {"league":  2, "game_class": 21, "label": "Damen NLB",      "group": None},           # verify
+    {"league":  3, "game_class": 21, "label": "Damen 1. Liga",  "group": None},           # verify
+    {"league":  4, "game_class": 21, "label": "Damen 2. Liga",  "group": None},           # verify
+    {"league":  5, "game_class": 21, "label": "Damen 3. Liga",  "group": None},           # verify
+
+    # ── Mobiliar Cup ──────────────────────────────────────────────────
+    # SwissUnihockey runs the Cup separately. The API typically exposes it
+    # under mode=cup with a dedicated league ID. Verify before relying on it.
+    {"league": 24, "game_class": 11, "label": "Mobiliar Cup Herren", "group": None, "mode": "cup"},  # verify
+    {"league": 24, "game_class": 21, "label": "Mobiliar Cup Damen",  "group": None, "mode": "cup"},  # verify
 ]
 
+# Friendly names we display in the app, mapping API labels to canonical ones.
 LEAGUE_MAP = {
     "Herren L-UPL": "Herren NLA",
     "Herren SML":   "Herren NLA",
+    "Damen L-UPL":  "Damen NLA",
 }
+
+# Range of (league, game_class) pairs the --discover sweep probes.
+DISCOVER_LEAGUES     = range(1, 30)
+DISCOVER_GAME_CLASSES = [11, 21, 31, 41]   # 11/21 = Herren/Damen senior; 31/41 = juniors
 
 # ── API helpers ───────────────────────────────────────────────────────────────
 
@@ -105,6 +138,8 @@ def phase_from_label(label):
         return "Playoff-Final"
     if "playoff" in low or "play-off" in low:
         return "Playoffs"
+    if "cup" in low:
+        return "Cup"
     return "Qualifikation"
 
 
@@ -133,12 +168,12 @@ def sb_upsert(table, rows):
         r.raise_for_status()
 
 
-# ── Fetch upcoming rounds ────────────────────────────────────────────────────
+# ── Fetch upcoming rounds ─────────────────────────────────────────────────────
 
-def fetch_upcoming_games(league_id, game_class, season, group=None):
+def fetch_upcoming_games(league_id, game_class, season, group=None, mode="list"):
     """Fetch games from the current + next round and return those within 7 days."""
     params = {
-        "mode":       "list",
+        "mode":       mode,
         "league":     league_id,
         "game_class": game_class,
         "season":     season,
@@ -151,7 +186,8 @@ def fetch_upcoming_games(league_id, game_class, season, group=None):
     games = []
     visited = set()
 
-    # Fetch up to 3 rounds (current + next two) to cover the 7-day window
+    # Up to 3 rounds (current + 2 forward) to cover the 7-day window. Cup
+    # rounds are sparse, so 3 is usually overkill — but it's cheap.
     round_param = None
     for _ in range(3):
         p = dict(params)
@@ -201,7 +237,7 @@ def fetch_upcoming_games(league_id, game_class, season, group=None):
                 if today <= game_date <= cutoff:
                     games.append(game)
 
-        # Navigate forward to get the next round
+        # Navigate forward to the next round.
         nxt = slider.get("next", {}).get("set_in_context", {}).get("round")
         if nxt and nxt not in visited:
             visited.add(nxt)
@@ -255,7 +291,7 @@ def parse_game_row(game_id, cells, season, region_title, group_override, subtitl
     if not iso_date:
         return None
 
-    # Treat pending results as null
+    # Treat pending results as null.
     if not result or result in ("-:-", "-", ""):
         result = None
 
@@ -280,9 +316,45 @@ def parse_game_row(game_id, cells, season, region_title, group_override, subtitl
     }
 
 
+# ── Discovery sweep ───────────────────────────────────────────────────────────
+
+def discover_leagues():
+    """Probe every (league, game_class) in the discover ranges with one cheap
+    `mode=list` query and report how many rows came back. Use this to verify
+    the LEAGUES list against the live API — pairs that return 0 are wrong."""
+    log.info(f"Probing season {CURRENT_SEASON}…")
+    log.info(f"{'league':>7} {'class':>6} {'rows':>5}  label_seen")
+
+    found = []
+    for league_id in DISCOVER_LEAGUES:
+        for gc in DISCOVER_GAME_CLASSES:
+            raw = api_get("games", {
+                "mode": "list", "league": league_id,
+                "game_class": gc, "season": CURRENT_SEASON,
+            })
+            time.sleep(SLEEP)
+            data = (raw or {}).get("data", raw) if isinstance(raw, dict) else {}
+            regions = data.get("regions", []) if isinstance(data, dict) else []
+            row_count = sum(len(r.get("rows", [])) for r in regions)
+            if row_count == 0:
+                continue
+            label = (regions[0].get("title") or regions[0].get("text") or "").strip() if regions else ""
+            log.info(f"{league_id:>7} {gc:>6} {row_count:>5}  {label}")
+            found.append((league_id, gc, row_count, label))
+
+    log.info(f"\n{len(found)} non-empty (league, game_class) pairs found.")
+    log.info("If a pair from LEAGUES isn't in this list, fix its IDs.")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    if "--discover" in sys.argv:
+        if not SUPABASE_SERVICE_KEY:
+            log.warning("SUPABASE_SERVICE_KEY not needed for --discover, continuing.")
+        discover_leagues()
+        return
+
     if not SUPABASE_SERVICE_KEY:
         log.error("SUPABASE_SERVICE_KEY not set — aborting.")
         sys.exit(1)
@@ -292,12 +364,14 @@ def main():
 
     for cfg in LEAGUES:
         label = cfg["label"]
-        group = cfg["group"]
+        group = cfg.get("group")
+        mode  = cfg.get("mode", "list")
         tag = f" {group}" if group else ""
-        log.info(f"Fetching {label}{tag}...")
+        mode_tag = f" [{mode}]" if mode != "list" else ""
+        log.info(f"Fetching {label}{tag}{mode_tag}…")
 
         games = fetch_upcoming_games(
-            cfg["league"], cfg["game_class"], CURRENT_SEASON, group
+            cfg["league"], cfg["game_class"], CURRENT_SEASON, group, mode,
         )
 
         for g in games:
