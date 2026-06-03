@@ -23,7 +23,7 @@ BASE_URL = "https://api-v2.swissunihockey.ch/api"
 SUPABASE_URL = "https://ibqwotgrzgrwvejtphnh.supabase.co"
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 SLEEP = 0.4
-CURRENT_SEASON = 2025
+CURRENT_SEASON = 2026
 
 # Each row = one API query.
 #   league / game_class : numeric IDs in the SwissUnihockey API
