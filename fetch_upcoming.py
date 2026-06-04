@@ -8,6 +8,10 @@ Two-stage fetch:
  2. /api/games/<id> on each ID fills in the real team IDs, location with
     coordinates, accurate date/time, referees, and a rich subtitle.
 
+Also writes any newly-seen venue (with lat/lng from the API's map link) into
+public.venues. Existing venue rows are left alone, so manual coord
+corrections survive a re-run.
+
 Run daily via GitHub Actions or manually:
     SUPABASE_SERVICE_KEY=... python fetch_upcoming.py
 """
@@ -129,6 +133,20 @@ def sb_upsert(table, rows):
         r.raise_for_status()
 
 
+def sb_insert_ignore(table, rows):
+    """Insert with `resolution=ignore-duplicates` — rows whose unique key
+    already exists are silently skipped. Used for venues so manual coord
+    corrections survive a re-sync."""
+    if not rows:
+        return
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    headers = sb_headers().copy()
+    headers["Prefer"] = "resolution=ignore-duplicates,return=minimal"
+    r = SESSION.post(url, headers=headers, data=json.dumps(rows, default=str))
+    if r.status_code not in (200, 201, 204):
+        log.warning(f"  {table} insert returned {r.status_code}: {r.text[:200]}")
+
+
 # ── Stage 1: collect game IDs via mode=current ───────────────────────────────
 
 def sweep_game_ids(season, days=DAYS_AHEAD):
@@ -191,7 +209,8 @@ def fetch_game_detail(game_id, region_label, season):
     """Hit /games/<id> and build a row matching the fb_games schema.
 
     The detail endpoint declares cell order via `headers[*].key`, so we index
-    by key instead of position — safe against future column reshuffles."""
+    by key instead of position — safe against future column reshuffles. Also
+    pulls x/y from the location cell's map link for venue upsert."""
     raw = api_get(f"games/{game_id}")
     if not raw:
         return None
@@ -226,8 +245,14 @@ def fetch_game_detail(game_id, region_label, season):
 
     loc_cell = by_key.get("location") or {}
     location = cell_text(loc_cell) or None
-    # Last whitespace-separated chunk is usually the city (often "Gossau SG").
     location_city = location.split()[-1] if location else None
+
+    # SU's location cell carries a {type:'map', x: lon, y: lat} link.
+    loc_link = loc_cell.get("link") if isinstance(loc_cell, dict) else None
+    loc_lat = loc_lng = None
+    if loc_link and loc_link.get("type") == "map":
+        loc_lng = loc_link.get("x")
+        loc_lat = loc_link.get("y")
 
     subtitle = (data.get("subtitle") or "").strip() or None
     phase = phase_from_label(subtitle or region_label)
@@ -250,7 +275,36 @@ def fetch_game_detail(game_id, region_label, season):
         "subtitle":      subtitle,
         "phase":         phase,
         "league":        league_label,
+        # Private — stripped by split_venues() before the fb_games upsert.
+        "_loc_lat":      loc_lat,
+        "_loc_lng":      loc_lng,
     }
+
+
+# ── Venues ────────────────────────────────────────────────────────────────────
+
+def split_venues(games):
+    """Pull (name, lat, lng, city) out of each game, dedupe by name, and
+    strip the private _loc_* keys so the fb_games upsert stays
+    schema-clean. Returns the venue list."""
+    seen = set()
+    venues = []
+    for g in games:
+        lat = g.pop("_loc_lat", None)
+        lng = g.pop("_loc_lng", None)
+        name = g.get("location")
+        if not name or lat is None or lng is None:
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        venues.append({
+            "name": name,
+            "lat":  float(lat),
+            "lng":  float(lng),
+            "city": g.get("location_city"),
+        })
+    return venues
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -291,6 +345,11 @@ def main():
     log.info(f"\nTotal: {len(games)} games to upsert ({skipped} skipped)")
 
     if games:
+        venues = split_venues(games)
+        if venues:
+            sb_insert_ignore("venues", venues)
+            log.info(f"  {len(venues)} unique venues sent (existing ignored)")
+
         sb_upsert("fb_games", games)
         log.info(f"Upserted {len(games)} games to Supabase fb_games")
 
