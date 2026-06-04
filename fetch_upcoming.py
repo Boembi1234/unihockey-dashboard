@@ -1,11 +1,12 @@
 """Fetch upcoming games (next 7 days) across all Swiss floorball competitions
 and push to Supabase.
 
-Uses the SU API's `mode=current` endpoint — same source the live frontend
-uses. No league/game_class filter, so this picks up every competition the
-API exposes for the date: NLA / NLB / 1.-5. Liga, Damen, Mobiliar Cup,
-juniors, regional play-offs… whatever is on the schedule. The script walks
-the date slider forward until it goes past the 7-day cutoff.
+Two-stage fetch:
+ 1. mode=current sweep walks the date slider forward to collect game IDs for
+    every competition on each day (NLA/NLB/1.-5. Liga, Damen, Mobiliar Cup,
+    juniors — whatever SU runs).
+ 2. /api/games/<id> on each ID fills in the real team IDs, location with
+    coordinates, accurate date/time, referees, and a rich subtitle.
 
 Run daily via GitHub Actions or manually:
     SUPABASE_SERVICE_KEY=... python fetch_upcoming.py
@@ -24,18 +25,20 @@ log = logging.getLogger(__name__)
 BASE_URL = "https://api-v2.swissunihockey.ch/api"
 SUPABASE_URL = "https://ibqwotgrzgrwvejtphnh.supabase.co"
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
-SLEEP = 0.4
+SLEEP = 0.3
 CURRENT_SEASON = 2026
 DAYS_AHEAD = 7
 
-# Canonicalise the labels SU uses so app filters stay stable.
+# Normalise SU labels to the canonical names the app filters on.
 LEAGUE_MAP = {
-    "Herren L-UPL": "Herren NLA",
-    "Herren SML":   "Herren NLA",
-    "Damen L-UPL":  "Damen NLA",
+    "Herren L-UPL":                  "Herren NLA",
+    "Herren SML":                    "Herren NLA",
+    "Damen L-UPL":                   "Damen NLA",
+    "Mobiliar Unihockey Cup Männer": "Mobiliar Cup Herren",
+    "Mobiliar Unihockey Cup Frauen": "Mobiliar Cup Damen",
 }
 
-# ── API helpers ───────────────────────────────────────────────────────────────
+# ── HTTP ──────────────────────────────────────────────────────────────────────
 
 SESSION = requests.Session()
 SESSION.headers["Accept"] = "application/json"
@@ -54,6 +57,8 @@ def api_get(endpoint, params=None):
     return None
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def cell_text(cell, index=0):
     if not isinstance(cell, dict):
         return str(cell) if cell else ""
@@ -63,24 +68,16 @@ def cell_text(cell, index=0):
     return t or ""
 
 
-def cell_link_id(cell):
-    link = cell.get("link") or {}
-    ids = link.get("ids", [])
-    return str(ids[0]) if ids else None
+def cell_link_ids(cell):
+    link = (cell or {}).get("link") or {}
+    return link.get("ids") or []
 
 
-def team_hash(name):
-    return abs(hash(name)) % 10**9 if name else None
-
-
-def parse_date(s):
+def parse_iso_date(s):
+    """Accepts 'DD.MM.YYYY' or 'YYYY-MM-DD', returns (iso, weekday)."""
     if not s:
         return None, None
     s = s.strip().split(" ")[0]
-    relative = {"heute": 0, "gestern": -1, "morgen": 1}
-    if s.lower() in relative:
-        d = date.today() + timedelta(days=relative[s.lower()])
-        return d.isoformat(), d.strftime("%A")
     for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
         try:
             d = datetime.strptime(s, fmt).date()
@@ -111,7 +108,7 @@ def norm_league(name):
     return LEAGUE_MAP.get(name, name) if name else name
 
 
-# ── Supabase helpers ──────────────────────────────────────────────────────────
+# ── Supabase ──────────────────────────────────────────────────────────────────
 
 def sb_headers():
     return {
@@ -132,89 +129,18 @@ def sb_upsert(table, rows):
         r.raise_for_status()
 
 
-# ── Game row parser ───────────────────────────────────────────────────────────
+# ── Stage 1: collect game IDs via mode=current ───────────────────────────────
 
-def parse_game_row(game_id, cells, season, region_title, subtitle=None, phase=None):
-    """Parse a game row from the API into a dict matching the fb_games schema."""
-    if len(cells) >= 8:
-        # New API layout
-        datetime_raw = cell_text(cells[0], 0)
-        parts = datetime_raw.split(" ", 1)
-        date_raw = parts[0]
-        time_raw = parts[1] if len(parts) > 1 else ""
-        loc_raw = cell_text(cells[1], 0)
-        loc_city = ""
-        home_name = cell_text(cells[2], 0)
-        home_id = cell_link_id(cells[2]) or team_hash(home_name)
-        away_name = cell_text(cells[6], 0)
-        away_id = cell_link_id(cells[6]) or team_hash(away_name)
-        result = cell_text(cells[7], 0)
-    elif len(cells) >= 6:
-        date_raw = cell_text(cells[0], 0)
-        time_raw = cell_text(cells[0], 1)
-        loc_raw = cell_text(cells[1], 0)
-        loc_city = cell_text(cells[1], 1)
-        home_name = cell_text(cells[3], 0)
-        away_name = cell_text(cells[4], 0)
-        result = cell_text(cells[5], 0)
-        home_id = team_hash(home_name)
-        away_id = team_hash(away_name)
-    elif len(cells) >= 5:
-        date_raw = cell_text(cells[0], 0)
-        time_raw = cell_text(cells[0], 1)
-        loc_raw = cell_text(cells[1], 0)
-        loc_city = cell_text(cells[1], 1)
-        home_name = cell_text(cells[2], 0)
-        away_name = cell_text(cells[3], 0)
-        result = cell_text(cells[4], 0)
-        home_id = team_hash(home_name)
-        away_id = team_hash(away_name)
-    else:
-        return None
-
-    iso_date, weekday = parse_date(date_raw)
-    if not iso_date:
-        return None
-
-    # Treat pending results as null.
-    if not result or result in ("-:-", "-", ""):
-        result = None
-
-    return {
-        "game_id":       game_id,
-        "home_team_id":  home_id,
-        "away_team_id":  away_id,
-        "home_team_raw": home_name,
-        "away_team_raw": away_name,
-        "date":          iso_date,
-        "weekday":       weekday or None,
-        "time":          time_raw or None,
-        "season":        season,
-        "result":        result,
-        "location":      loc_raw or None,
-        "location_city": loc_city or None,
-        "league_group":  region_title or None,
-        "subtitle":      subtitle,
-        "phase":         phase or "Qualifikation",
-    }
-
-
-# ── Sweep mode=current across the 7-day window ───────────────────────────────
-
-def fetch_all_upcoming(season, days=DAYS_AHEAD):
-    """Walk mode=current forward day-by-day until we pass the cutoff. Every
-    region the API returns lands in the result with its own league label,
-    so Cup / juniors / regional games come along for the ride."""
+def sweep_game_ids(season, days=DAYS_AHEAD):
+    """Walk mode=current forward day by day; return [(game_id, region_label)]."""
     today  = date.today()
     cutoff = today + timedelta(days=days)
-    games  = []
-    seen_game_ids = set()
-    seen_dates    = set()
+    ids = []
+    seen_ids = set()
+    seen_dates = set()
     after_date = None
 
-    # Generous upper bound — SU's slider often skips empty days, so 7 calls
-    # is plenty even on a busy weekend; the slider-out break handles the rest.
-    for _ in range(20):
+    for _ in range(20):                        # generous upper bound
         params = {"mode": "current", "season": season}
         if after_date:
             params["after_date"] = after_date
@@ -231,7 +157,6 @@ def fetch_all_upcoming(season, days=DAYS_AHEAD):
             d = date.fromisoformat(page_date)
         except ValueError:
             break
-
         if d > cutoff:
             break
         if page_date in seen_dates:
@@ -240,48 +165,92 @@ def fetch_all_upcoming(season, days=DAYS_AHEAD):
 
         page_count = 0
         for region in data.get("regions", []):
-            region_title = (region.get("title") or region.get("text") or "").strip()
-            league_label = norm_league(region_title) or region_title
-            phase = phase_from_label(region_title)
-
+            region_label = (region.get("text") or region.get("title") or "").strip()
             for row in region.get("rows", []):
-                cells = row.get("cells", [])
-                gid = None
-                for cell in cells:
-                    link = cell.get("link") or {}
-                    if link.get("page") == "game_detail":
-                        ids = link.get("ids", [])
-                        if ids:
-                            gid = str(ids[0])
-                            break
-                if not gid or gid in seen_game_ids:
+                gid = str(row.get("id") or "")
+                if not gid or gid in seen_ids:
                     continue
-
-                game = parse_game_row(gid, cells, season, region_title, phase=phase)
-                if not game or not game.get("date"):
-                    continue
-                try:
-                    gd = date.fromisoformat(game["date"])
-                except ValueError:
-                    continue
-                if not (today <= gd <= cutoff):
-                    continue
-
-                game["league"] = league_label
-                games.append(game)
-                seen_game_ids.add(gid)
+                ids.append((gid, region_label))
+                seen_ids.add(gid)
                 page_count += 1
 
         log.info(f"  {page_date}: {page_count} games")
 
-        # Walk forward via slider.next.set_in_context.after_date.
         nxt = (data.get("slider") or {}).get("next", {}).get("set_in_context", {}).get("after_date")
         if not nxt or nxt == after_date:
             break
         after_date = nxt
         time.sleep(SLEEP)
 
-    return games
+    return ids
+
+
+# ── Stage 2: per-game detail → fb_games row ──────────────────────────────────
+
+def fetch_game_detail(game_id, region_label, season):
+    """Hit /games/<id> and build a row matching the fb_games schema.
+
+    The detail endpoint declares cell order via `headers[*].key`, so we index
+    by key instead of position — safe against future column reshuffles."""
+    raw = api_get(f"games/{game_id}")
+    if not raw:
+        return None
+
+    data = raw.get("data", raw) if isinstance(raw, dict) else {}
+    headers = data.get("headers", []) or []
+    keys = [(h.get("key") or "") for h in headers]
+    regions = data.get("regions", []) or []
+    if not regions or not regions[0].get("rows"):
+        return None
+
+    cells = regions[0]["rows"][0].get("cells", [])
+    by_key = {k: cells[i] for i, k in enumerate(keys) if i < len(cells) and k}
+
+    home_cell = by_key.get("home_name") or by_key.get("home_logo") or {}
+    away_cell = by_key.get("away_name") or by_key.get("away_logo") or {}
+
+    home_ids = cell_link_ids(home_cell)
+    away_ids = cell_link_ids(away_cell)
+    home_name = cell_text(by_key.get("home_name"))
+    away_name = cell_text(by_key.get("away_name"))
+
+    iso_date, weekday = parse_iso_date(cell_text(by_key.get("date")))
+    if not iso_date:
+        log.warning(f"  game {game_id}: no date, skipping")
+        return None
+
+    time_raw = cell_text(by_key.get("time")) or None
+    result   = cell_text(by_key.get("result")) or None
+    if result in ("", "-", "-:-"):
+        result = None
+
+    loc_cell = by_key.get("location") or {}
+    location = cell_text(loc_cell) or None
+    # Last whitespace-separated chunk is usually the city (often "Gossau SG").
+    location_city = location.split()[-1] if location else None
+
+    subtitle = (data.get("subtitle") or "").strip() or None
+    phase = phase_from_label(subtitle or region_label)
+    league_label = norm_league(region_label) or region_label
+
+    return {
+        "game_id":       game_id,
+        "home_team_id":  int(home_ids[0]) if home_ids else None,
+        "away_team_id":  int(away_ids[0]) if away_ids else None,
+        "home_team_raw": home_name,
+        "away_team_raw": away_name,
+        "date":          iso_date,
+        "weekday":       weekday,
+        "time":          time_raw,
+        "season":        season,
+        "result":        result,
+        "location":      location,
+        "location_city": location_city,
+        "league_group":  region_label or None,
+        "subtitle":      subtitle,
+        "phase":         phase,
+        "league":        league_label,
+    }
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -291,23 +260,39 @@ def main():
         log.error("SUPABASE_SERVICE_KEY not set — aborting.")
         sys.exit(1)
 
-    log.info(f"Sweeping mode=current for season {CURRENT_SEASON}, next {DAYS_AHEAD} days…")
-    all_games = fetch_all_upcoming(CURRENT_SEASON, days=DAYS_AHEAD)
+    log.info(f"Stage 1: sweep mode=current for season {CURRENT_SEASON}, next {DAYS_AHEAD} days…")
+    id_pairs = sweep_game_ids(CURRENT_SEASON, days=DAYS_AHEAD)
+    log.info(f"  Collected {len(id_pairs)} game IDs")
 
-    # Light summary by league so the log is useful.
+    if not id_pairs:
+        log.info("Nothing to fetch.")
+        return
+
+    log.info(f"Stage 2: fetching details for {len(id_pairs)} games…")
+    games = []
+    skipped = 0
+    for i, (gid, region_label) in enumerate(id_pairs, 1):
+        row = fetch_game_detail(gid, region_label, CURRENT_SEASON)
+        if row:
+            games.append(row)
+        else:
+            skipped += 1
+        if i % 25 == 0 or i == len(id_pairs):
+            log.info(f"  {i}/{len(id_pairs)} fetched ({skipped} skipped)")
+        time.sleep(SLEEP)
+
+    # Per-league summary so the log is useful.
     by_league = {}
-    for g in all_games:
+    for g in games:
         by_league[g["league"]] = by_league.get(g["league"], 0) + 1
     for label, n in sorted(by_league.items(), key=lambda x: (-x[1], x[0])):
         log.info(f"  {n:>4}  {label}")
 
-    log.info(f"\nTotal: {len(all_games)} upcoming games in next {DAYS_AHEAD} days")
+    log.info(f"\nTotal: {len(games)} games to upsert ({skipped} skipped)")
 
-    if all_games:
-        sb_upsert("fb_games", all_games)
-        log.info(f"Upserted {len(all_games)} games to Supabase fb_games")
-    else:
-        log.info("No upcoming games to sync")
+    if games:
+        sb_upsert("fb_games", games)
+        log.info(f"Upserted {len(games)} games to Supabase fb_games")
 
 
 if __name__ == "__main__":
