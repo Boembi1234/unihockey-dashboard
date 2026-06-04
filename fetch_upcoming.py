@@ -1,15 +1,17 @@
-"""Fetch upcoming games (next 7 days) for all tracked leagues + Mobiliar Cup,
-push to Supabase.
+"""Fetch upcoming games (next 7 days) across all Swiss floorball competitions
+and push to Supabase.
+
+Uses the SU API's `mode=current` endpoint — same source the live frontend
+uses. No league/game_class filter, so this picks up every competition the
+API exposes for the date: NLA / NLB / 1.-5. Liga, Damen, Mobiliar Cup,
+juniors, regional play-offs… whatever is on the schedule. The script walks
+the date slider forward until it goes past the 7-day cutoff.
 
 Run daily via GitHub Actions or manually:
     SUPABASE_SERVICE_KEY=... python fetch_upcoming.py
-
-One-off discovery (prints which (league, game_class) combinations actually
-return rows, so you can verify the LEAGUES list against the real API):
-    SUPABASE_SERVICE_KEY=... python fetch_upcoming.py --discover
 """
 
-import os, sys, json, time, re, logging, requests
+import os, sys, json, time, logging, requests
 from datetime import date, timedelta, datetime
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -24,52 +26,14 @@ SUPABASE_URL = "https://ibqwotgrzgrwvejtphnh.supabase.co"
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 SLEEP = 0.4
 CURRENT_SEASON = 2026
+DAYS_AHEAD = 7
 
-# Each row = one API query.
-#   league / game_class : numeric IDs in the SwissUnihockey API
-#   group               : optional Gruppe filter (some divisions are split)
-#   mode                : defaults to "list"; cup competitions use "cup"
-#   label               : human-readable name written to fb_games.league
-#
-# IDs marked ✅ are verified against your prior version. Others (2.-5. Liga,
-# Damen NLB/1.-3. Liga, Cup) are extrapolated from the API's numbering
-# pattern. Run `python fetch_upcoming.py --discover` to confirm — anything
-# returning 0 rows is wrong and needs the real ID.
-LEAGUES = [
-    # ── Herren Senior ─────────────────────────────────────────────────
-    {"league": 24, "game_class": 11, "label": "Herren L-UPL",   "group": None},          # ✅
-    {"league":  2, "game_class": 11, "label": "Herren NLB",     "group": None},          # ✅
-    {"league":  3, "game_class": 11, "label": "Herren 1. Liga", "group": "Gruppe 1"},     # ✅
-    {"league":  3, "game_class": 11, "label": "Herren 1. Liga", "group": "Gruppe 2"},     # ✅
-    {"league":  4, "game_class": 11, "label": "Herren 2. Liga", "group": None},           # verify
-    {"league":  5, "game_class": 11, "label": "Herren 3. Liga", "group": None},           # verify
-    {"league":  6, "game_class": 11, "label": "Herren 4. Liga", "group": None},           # verify
-    {"league":  7, "game_class": 11, "label": "Herren 5. Liga", "group": None},           # verify
-
-    # ── Damen Senior ──────────────────────────────────────────────────
-    {"league": 24, "game_class": 21, "label": "Damen L-UPL",    "group": None},           # ✅
-    {"league":  2, "game_class": 21, "label": "Damen NLB",      "group": None},           # verify
-    {"league":  3, "game_class": 21, "label": "Damen 1. Liga",  "group": None},           # verify
-    {"league":  4, "game_class": 21, "label": "Damen 2. Liga",  "group": None},           # verify
-    {"league":  5, "game_class": 21, "label": "Damen 3. Liga",  "group": None},           # verify
-
-    # ── Mobiliar Cup ──────────────────────────────────────────────────
-    # SwissUnihockey runs the Cup separately. The API typically exposes it
-    # under mode=cup with a dedicated league ID. Verify before relying on it.
-    {"league": 24, "game_class": 11, "label": "Mobiliar Cup Herren", "group": None, "mode": "cup"},  # verify
-    {"league": 24, "game_class": 21, "label": "Mobiliar Cup Damen",  "group": None, "mode": "cup"},  # verify
-]
-
-# Friendly names we display in the app, mapping API labels to canonical ones.
+# Canonicalise the labels SU uses so app filters stay stable.
 LEAGUE_MAP = {
     "Herren L-UPL": "Herren NLA",
     "Herren SML":   "Herren NLA",
     "Damen L-UPL":  "Damen NLA",
 }
-
-# Range of (league, game_class) pairs the --discover sweep probes.
-DISCOVER_LEAGUES     = range(1, 30)
-DISCOVER_GAME_CLASSES = [11, 21, 31, 41]   # 11/21 = Herren/Damen senior; 31/41 = juniors
 
 # ── API helpers ───────────────────────────────────────────────────────────────
 
@@ -130,6 +94,8 @@ def phase_from_label(label):
     if not label:
         return "Qualifikation"
     low = label.lower()
+    if "cup" in low:
+        return "Cup"
     if "final" in low and "viertel" in low:
         return "Playoff-Viertelfinal"
     if "halbfinal" in low or "semi" in low:
@@ -138,8 +104,6 @@ def phase_from_label(label):
         return "Playoff-Final"
     if "playoff" in low or "play-off" in low:
         return "Playoffs"
-    if "cup" in low:
-        return "Cup"
     return "Qualifikation"
 
 
@@ -168,88 +132,9 @@ def sb_upsert(table, rows):
         r.raise_for_status()
 
 
-# ── Fetch upcoming rounds ─────────────────────────────────────────────────────
+# ── Game row parser ───────────────────────────────────────────────────────────
 
-def fetch_upcoming_games(league_id, game_class, season, group=None, mode="list"):
-    """Fetch games from the current + next round and return those within 7 days."""
-    params = {
-        "mode":       mode,
-        "league":     league_id,
-        "game_class": game_class,
-        "season":     season,
-    }
-    if group:
-        params["group"] = group
-
-    today = date.today()
-    cutoff = today + timedelta(days=7)
-    games = []
-    visited = set()
-
-    # Up to 3 rounds (current + 2 forward) to cover the 7-day window. Cup
-    # rounds are sparse, so 3 is usually overkill — but it's cheap.
-    round_param = None
-    for _ in range(3):
-        p = dict(params)
-        if round_param is not None:
-            p["round"] = round_param
-
-        raw = api_get("games", p)
-        if not raw:
-            break
-
-        data = raw.get("data", raw) if isinstance(raw, dict) else {}
-        regions = data.get("regions", [])
-
-        slider = data.get("slider", {})
-        round_label = slider.get("text", "") or ""
-        phase = phase_from_label(round_label)
-        subtitle = round_label or None
-
-        for region in regions:
-            region_title = (region.get("title") or region.get("text") or "").strip()
-            for row in region.get("rows", []):
-                cells = row.get("cells", [])
-                gid = None
-                for cell in cells:
-                    link = cell.get("link") or {}
-                    if link.get("page") == "game_detail":
-                        ids = link.get("ids", [])
-                        if ids:
-                            gid = str(ids[0])
-                            break
-                if not gid:
-                    continue
-
-                game = parse_game_row(gid, cells, season, region_title, group, subtitle, phase)
-                if not game:
-                    continue
-
-                iso_date = game.get("date")
-                if not iso_date:
-                    continue
-
-                try:
-                    game_date = date.fromisoformat(iso_date)
-                except ValueError:
-                    continue
-
-                if today <= game_date <= cutoff:
-                    games.append(game)
-
-        # Navigate forward to the next round.
-        nxt = slider.get("next", {}).get("set_in_context", {}).get("round")
-        if nxt and nxt not in visited:
-            visited.add(nxt)
-            round_param = nxt
-            time.sleep(SLEEP)
-        else:
-            break
-
-    return games
-
-
-def parse_game_row(game_id, cells, season, region_title, group_override, subtitle=None, phase=None):
+def parse_game_row(game_id, cells, season, region_title, subtitle=None, phase=None):
     """Parse a game row from the API into a dict matching the fb_games schema."""
     if len(cells) >= 8:
         # New API layout
@@ -295,8 +180,6 @@ def parse_game_row(game_id, cells, season, region_title, group_override, subtitl
     if not result or result in ("-:-", "-", ""):
         result = None
 
-    league_group = group_override or region_title or ""
-
     return {
         "game_id":       game_id,
         "home_team_id":  home_id,
@@ -310,80 +193,115 @@ def parse_game_row(game_id, cells, season, region_title, group_override, subtitl
         "result":        result,
         "location":      loc_raw or None,
         "location_city": loc_city or None,
-        "league_group":  league_group or None,
+        "league_group":  region_title or None,
         "subtitle":      subtitle,
         "phase":         phase or "Qualifikation",
     }
 
 
-# ── Discovery sweep ───────────────────────────────────────────────────────────
+# ── Sweep mode=current across the 7-day window ───────────────────────────────
 
-def discover_leagues():
-    """Probe every (league, game_class) in the discover ranges with one cheap
-    `mode=list` query and report how many rows came back. Use this to verify
-    the LEAGUES list against the live API — pairs that return 0 are wrong."""
-    log.info(f"Probing season {CURRENT_SEASON}…")
-    log.info(f"{'league':>7} {'class':>6} {'rows':>5}  label_seen")
+def fetch_all_upcoming(season, days=DAYS_AHEAD):
+    """Walk mode=current forward day-by-day until we pass the cutoff. Every
+    region the API returns lands in the result with its own league label,
+    so Cup / juniors / regional games come along for the ride."""
+    today  = date.today()
+    cutoff = today + timedelta(days=days)
+    games  = []
+    seen_game_ids = set()
+    seen_dates    = set()
+    after_date = None
 
-    found = []
-    for league_id in DISCOVER_LEAGUES:
-        for gc in DISCOVER_GAME_CLASSES:
-            raw = api_get("games", {
-                "mode": "list", "league": league_id,
-                "game_class": gc, "season": CURRENT_SEASON,
-            })
-            time.sleep(SLEEP)
-            data = (raw or {}).get("data", raw) if isinstance(raw, dict) else {}
-            regions = data.get("regions", []) if isinstance(data, dict) else []
-            row_count = sum(len(r.get("rows", [])) for r in regions)
-            if row_count == 0:
-                continue
-            label = (regions[0].get("title") or regions[0].get("text") or "").strip() if regions else ""
-            log.info(f"{league_id:>7} {gc:>6} {row_count:>5}  {label}")
-            found.append((league_id, gc, row_count, label))
+    # Generous upper bound — SU's slider often skips empty days, so 7 calls
+    # is plenty even on a busy weekend; the slider-out break handles the rest.
+    for _ in range(20):
+        params = {"mode": "current", "season": season}
+        if after_date:
+            params["after_date"] = after_date
 
-    log.info(f"\n{len(found)} non-empty (league, game_class) pairs found.")
-    log.info("If a pair from LEAGUES isn't in this list, fix its IDs.")
+        raw = api_get("games", params)
+        if not raw:
+            break
+
+        data = raw.get("data", raw) if isinstance(raw, dict) else {}
+        ctx  = data.get("context", {}) or {}
+        page_date = ctx.get("on_date") or after_date or today.isoformat()
+
+        try:
+            d = date.fromisoformat(page_date)
+        except ValueError:
+            break
+
+        if d > cutoff:
+            break
+        if page_date in seen_dates:
+            break
+        seen_dates.add(page_date)
+
+        page_count = 0
+        for region in data.get("regions", []):
+            region_title = (region.get("title") or region.get("text") or "").strip()
+            league_label = norm_league(region_title) or region_title
+            phase = phase_from_label(region_title)
+
+            for row in region.get("rows", []):
+                cells = row.get("cells", [])
+                gid = None
+                for cell in cells:
+                    link = cell.get("link") or {}
+                    if link.get("page") == "game_detail":
+                        ids = link.get("ids", [])
+                        if ids:
+                            gid = str(ids[0])
+                            break
+                if not gid or gid in seen_game_ids:
+                    continue
+
+                game = parse_game_row(gid, cells, season, region_title, phase=phase)
+                if not game or not game.get("date"):
+                    continue
+                try:
+                    gd = date.fromisoformat(game["date"])
+                except ValueError:
+                    continue
+                if not (today <= gd <= cutoff):
+                    continue
+
+                game["league"] = league_label
+                games.append(game)
+                seen_game_ids.add(gid)
+                page_count += 1
+
+        log.info(f"  {page_date}: {page_count} games")
+
+        # Walk forward via slider.next.set_in_context.after_date.
+        nxt = (data.get("slider") or {}).get("next", {}).get("set_in_context", {}).get("after_date")
+        if not nxt or nxt == after_date:
+            break
+        after_date = nxt
+        time.sleep(SLEEP)
+
+    return games
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    if "--discover" in sys.argv:
-        if not SUPABASE_SERVICE_KEY:
-            log.warning("SUPABASE_SERVICE_KEY not needed for --discover, continuing.")
-        discover_leagues()
-        return
-
     if not SUPABASE_SERVICE_KEY:
         log.error("SUPABASE_SERVICE_KEY not set — aborting.")
         sys.exit(1)
 
-    all_games = []
-    seen_ids = set()
+    log.info(f"Sweeping mode=current for season {CURRENT_SEASON}, next {DAYS_AHEAD} days…")
+    all_games = fetch_all_upcoming(CURRENT_SEASON, days=DAYS_AHEAD)
 
-    for cfg in LEAGUES:
-        label = cfg["label"]
-        group = cfg.get("group")
-        mode  = cfg.get("mode", "list")
-        tag = f" {group}" if group else ""
-        mode_tag = f" [{mode}]" if mode != "list" else ""
-        log.info(f"Fetching {label}{tag}{mode_tag}…")
+    # Light summary by league so the log is useful.
+    by_league = {}
+    for g in all_games:
+        by_league[g["league"]] = by_league.get(g["league"], 0) + 1
+    for label, n in sorted(by_league.items(), key=lambda x: (-x[1], x[0])):
+        log.info(f"  {n:>4}  {label}")
 
-        games = fetch_upcoming_games(
-            cfg["league"], cfg["game_class"], CURRENT_SEASON, group, mode,
-        )
-
-        for g in games:
-            if g["game_id"] not in seen_ids:
-                g["league"] = norm_league(label)
-                seen_ids.add(g["game_id"])
-                all_games.append(g)
-
-        log.info(f"  {len(games)} upcoming games found")
-        time.sleep(SLEEP)
-
-    log.info(f"\nTotal: {len(all_games)} upcoming games in next 7 days")
+    log.info(f"\nTotal: {len(all_games)} upcoming games in next {DAYS_AHEAD} days")
 
     if all_games:
         sb_upsert("fb_games", all_games)
