@@ -31,7 +31,7 @@ SUPABASE_URL = "https://ibqwotgrzgrwvejtphnh.supabase.co"
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 SLEEP = 0.3
 CURRENT_SEASON = 2026
-DAYS_AHEAD = 7
+DAYS_AHEAD = 60
 
 # Normalise SU labels to the canonical names the app filters on.
 LEAGUE_MAP = {
