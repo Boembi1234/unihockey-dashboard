@@ -1,22 +1,30 @@
-"""Fetch upcoming games (next 7 days) across all Swiss floorball competitions
+"""Fetch upcoming games (next 60 days) across ALL Swiss floorball competitions
 and push to Supabase.
 
-Two-stage fetch:
- 1. mode=current sweep walks the date slider forward to collect game IDs for
-    every competition on each day (NLA/NLB/1.-5. Liga, Damen, Mobiliar Cup,
-    juniors — whatever SU runs).
- 2. /api/games/<id> on each ID fills in the real team IDs, location with
-    coordinates, accurate date/time, referees, and a rich subtitle.
+Three-stage fetch:
+ 1a. League sweep: `games?mode=list` gives the full league navigation as tabs
+     (L-UPL, NLB, 1.-5. Liga inkl. KF, alle Junioren-Stufen, Senioren) with
+     their groups. For every league/game_class/group combo we walk the round
+     slider and collect game IDs whose date falls in the window. This is the
+     complete source — `mode=current` alone is a curated selection and misses
+     lower junior leagues entirely.
+ 1b. Current sweep: `mode=current` day-by-day as before. Cup competitions
+     (Mobiliar Cup, Ligacup, Supercup-Spieltage) are not part of the league
+     tabs, so this sweep is what surfaces them. Duplicates from 1a are
+     skipped.
+ 2.  /api/games/<id> on each ID fills in the real team IDs, location with
+     coordinates, accurate date/time and subtitle.
 
-Also writes any newly-seen venue (with lat/lng from the API's map link) into
-public.venues. Existing venue rows are left alone, so manual coord
-corrections survive a re-run.
+Venues: new venues are inserted with `on_conflict=name` +
+`resolution=ignore-duplicates`. Requires the UNIQUE index on venues.name
+(migration 20260729100000) — without an explicit conflict target PostgREST
+checks only the auto-generated PK and inserts duplicates on every run.
 
 Run daily via GitHub Actions or manually:
     SUPABASE_SERVICE_KEY=... python fetch_upcoming.py
 """
 
-import os, sys, json, time, logging, requests
+import os, re, sys, json, time, logging, requests
 from datetime import date, timedelta, datetime
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -29,9 +37,11 @@ log = logging.getLogger(__name__)
 BASE_URL = "https://api-v2.swissunihockey.ch/api"
 SUPABASE_URL = "https://ibqwotgrzgrwvejtphnh.supabase.co"
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
-SLEEP = 0.3
+SLEEP = 0.25
 CURRENT_SEASON = 2026
 DAYS_AHEAD = 60
+MAX_ROUNDS_PER_COMBO = 40      # safety bound while walking the round slider
+MAX_CURRENT_PAGES = 90         # day-by-day sweep upper bound (> DAYS_AHEAD)
 
 # Normalise SU labels to the canonical names the app filters on.
 LEAGUE_MAP = {
@@ -41,6 +51,28 @@ LEAGUE_MAP = {
     "Mobiliar Unihockey Cup Männer": "Mobiliar Cup Herren",
     "Mobiliar Unihockey Cup Frauen": "Mobiliar Cup Damen",
 }
+
+
+def combo_league_label(tab_label):
+    """Map an SU tab label to the canonical league name used in fb_games.
+
+    Tab labels look like 'L-UPL Men', 'HNLB', 'Herren Aktive GF 1. Liga',
+    'Junioren U16 A', 'Junioren B  Regional' (yes, double space)."""
+    label = " ".join((tab_label or "").split())    # collapse whitespace
+    fixed = {
+        "L-UPL Men":   "Herren NLA",
+        "L-UPL Women": "Damen NLA",
+        "HNLB":        "Herren NLB",
+        "DNLB":        "Damen NLB",
+    }
+    if label in fixed:
+        return fixed[label]
+    m = re.match(r"^(Herren|Damen) Aktive (GF|KF) (.+)$", label)
+    if m:
+        base = f"{m.group(1)} {m.group(3)}"
+        return base if m.group(2) == "GF" else f"{base} KF"
+    return label
+
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
@@ -61,6 +93,13 @@ def api_get(endpoint, params=None):
     return None
 
 
+def api_data(endpoint, params=None):
+    raw = api_get(endpoint, params)
+    if not raw:
+        return None
+    return raw.get("data", raw) if isinstance(raw, dict) else None
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def cell_text(cell, index=0):
@@ -78,7 +117,7 @@ def cell_link_ids(cell):
 
 
 def parse_iso_date(s):
-    """Accepts 'DD.MM.YYYY' or 'YYYY-MM-DD', returns (iso, weekday)."""
+    """Accepts 'DD.MM.YYYY[ HH:MM]' or 'YYYY-MM-DD', returns (iso, weekday)."""
     if not s:
         return None, None
     s = s.strip().split(" ")[0]
@@ -133,13 +172,14 @@ def sb_upsert(table, rows):
         r.raise_for_status()
 
 
-def sb_insert_ignore(table, rows):
-    """Insert with `resolution=ignore-duplicates` — rows whose unique key
-    already exists are silently skipped. Used for venues so manual coord
-    corrections survive a re-sync."""
+def sb_insert_ignore(table, rows, conflict_col):
+    """Insert, silently skipping rows whose `conflict_col` already exists.
+    The explicit on_conflict target is essential: without it PostgREST
+    resolves against the primary key (auto-generated) and every row inserts
+    as a fresh duplicate."""
     if not rows:
         return
-    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    url = f"{SUPABASE_URL}/rest/v1/{table}?on_conflict={conflict_col}"
     headers = sb_headers().copy()
     headers["Prefer"] = "resolution=ignore-duplicates,return=minimal"
     r = SESSION.post(url, headers=headers, data=json.dumps(rows, default=str))
@@ -147,30 +187,154 @@ def sb_insert_ignore(table, rows):
         log.warning(f"  {table} insert returned {r.status_code}: {r.text[:200]}")
 
 
-# ── Stage 1: collect game IDs via mode=current ───────────────────────────────
+# ── Stage 1a: league sweep via mode=list tabs ────────────────────────────────
 
-def sweep_game_ids(season, days=DAYS_AHEAD):
-    """Walk mode=current forward day by day; return [(game_id, region_label)]."""
+def discover_combos(season):
+    """Walk the mode=list tab tree → [{label, league, game_class, groups}].
+
+    Group names (Gruppe 1/2/…) sit as sub-entries of their league entry.
+    A request without `group` returns only the first group, so every group
+    has to be swept explicitly."""
+    data = api_data("games", {"mode": "list", "season": season})
+    if not data:
+        return []
+
+    combos = []
+
+    def walk(entries):
+        for e in entries or []:
+            sic = ((e.get("link") or {}).get("set_in_context")
+                   or e.get("set_in_context") or {})
+            label = e.get("text")
+            label = " ".join(label) if isinstance(label, list) else (label or "")
+            if sic.get("league") is not None and sic.get("game_class") is not None:
+                groups = []
+                for sub in e.get("entries") or []:
+                    g = (sub.get("set_in_context") or {}).get("group")
+                    if g:
+                        groups.append(g)
+                combos.append({
+                    "label":      combo_league_label(label),
+                    "league":     sic["league"],
+                    "game_class": sic["game_class"],
+                    "groups":     groups or [None],
+                })
+            walk(e.get("entries"))
+
+    walk(data.get("tabs"))
+    # SU's internal test league produces junk rows.
+    return [c for c in combos if "test" not in c["label"].lower()]
+
+
+def row_game_id_and_date(row):
+    """A mode=list row has no top-level id — the game id lives in the cells'
+    game_detail links; the first cell text is 'DD.MM.YYYY HH:MM'."""
+    gid = None
+    game_date = None
+    for cell in row.get("cells") or []:
+        link = cell.get("link") or {}
+        if link.get("page") == "game_detail" and link.get("ids"):
+            gid = str(link["ids"][0])
+        txt = cell_text(cell)
+        if game_date is None and re.match(r"^\d{2}\.\d{2}\.\d{4}", txt or ""):
+            game_date, _ = parse_iso_date(txt)
+    return gid, game_date
+
+
+def sweep_league_combo(season, combo, group, today, cutoff, seen_ids):
+    """Walk one combo's round slider; return [(game_id, league_label)] within
+    the date window. Rounds are chronological, so we stop as soon as a round
+    lies entirely beyond the cutoff."""
+    found = []
+    params = {"mode": "list", "season": season,
+              "league": combo["league"], "game_class": combo["game_class"]}
+    if group:
+        params["group"] = group
+
+    round_id = None
+    seen_rounds = set()
+    for _ in range(MAX_ROUNDS_PER_COMBO):
+        p = dict(params)
+        if round_id is not None:
+            p["round"] = round_id
+        data = api_data("games", p)
+        if not data:
+            break
+
+        rows = []
+        for region in data.get("regions") or []:
+            rows.extend(region.get("rows") or [])
+
+        dates_on_page = []
+        for row in rows:
+            gid, gdate = row_game_id_and_date(row)
+            if not gdate:
+                continue
+            dates_on_page.append(gdate)
+            if gid and gid not in seen_ids and today <= gdate <= cutoff:
+                seen_ids.add(gid)
+                found.append((gid, combo["label"]))
+
+        # Entire round beyond the window → later rounds are too.
+        if dates_on_page and min(dates_on_page) > cutoff:
+            break
+
+        nxt = (((data.get("slider") or {}).get("next") or {})
+               .get("set_in_context") or {}).get("round")
+        if not nxt or nxt in seen_rounds:
+            break
+        seen_rounds.add(nxt)
+        round_id = nxt
+        time.sleep(SLEEP)
+
+    return found
+
+
+def sweep_leagues(season, days=DAYS_AHEAD):
+    today  = date.today().isoformat()
+    cutoff = (date.today() + timedelta(days=days)).isoformat()
+
+    combos = discover_combos(season)
+    n_targets = sum(len(c["groups"]) for c in combos)
+    log.info(f"  {len(combos)} leagues / {n_targets} league+group targets discovered")
+
+    ids = []
+    seen_ids = set()
+    for combo in combos:
+        combo_found = []
+        for group in combo["groups"]:
+            combo_found.extend(
+                sweep_league_combo(season, combo, group, today, cutoff, seen_ids))
+            time.sleep(SLEEP)
+        if combo_found:
+            log.info(f"  {len(combo_found):>4}  {combo['label']}")
+        ids.extend(combo_found)
+    return ids, seen_ids
+
+
+# ── Stage 1b: mode=current day sweep (cups etc.) ─────────────────────────────
+
+def sweep_current(season, seen_ids, days=DAYS_AHEAD):
+    """Walk mode=current forward day by day. The league sweep already covers
+    regular leagues — this pass exists for competitions outside the league
+    tabs (Mobiliar Cup, Ligacup, Supercup-Spieltage)."""
     today  = date.today()
     cutoff = today + timedelta(days=days)
     ids = []
-    seen_ids = set()
     seen_dates = set()
     after_date = None
 
-    for _ in range(20):                        # generous upper bound
+    for _ in range(MAX_CURRENT_PAGES):
         params = {"mode": "current", "season": season}
         if after_date:
             params["after_date"] = after_date
 
-        raw = api_get("games", params)
-        if not raw:
+        data = api_data("games", params)
+        if not data:
             break
 
-        data = raw.get("data", raw) if isinstance(raw, dict) else {}
-        ctx  = data.get("context", {}) or {}
+        ctx = data.get("context", {}) or {}
         page_date = ctx.get("on_date") or after_date or today.isoformat()
-
         try:
             d = date.fromisoformat(page_date)
         except ValueError:
@@ -188,15 +352,19 @@ def sweep_game_ids(season, days=DAYS_AHEAD):
                 gid = str(row.get("id") or "")
                 if not gid or gid in seen_ids:
                     continue
-                ids.append((gid, region_label))
+                ids.append((gid, norm_league(region_label) or region_label))
                 seen_ids.add(gid)
                 page_count += 1
 
-        log.info(f"  {page_date}: {page_count} games")
+        if page_count:
+            log.info(f"  {page_date}: {page_count} additional games")
 
         nxt = (data.get("slider") or {}).get("next", {}).get("set_in_context", {}).get("after_date")
-        if not nxt or nxt == after_date:
+        if not nxt:
             break
+        # SU's slider echoes the current date as after_date; passing it back
+        # returns the NEXT day with games. Only a repeat of the same page
+        # (guarded via seen_dates above) means we're done.
         after_date = nxt
         time.sleep(SLEEP)
 
@@ -205,17 +373,16 @@ def sweep_game_ids(season, days=DAYS_AHEAD):
 
 # ── Stage 2: per-game detail → fb_games row ──────────────────────────────────
 
-def fetch_game_detail(game_id, region_label, season):
+def fetch_game_detail(game_id, league_label, season):
     """Hit /games/<id> and build a row matching the fb_games schema.
 
     The detail endpoint declares cell order via `headers[*].key`, so we index
     by key instead of position — safe against future column reshuffles. Also
     pulls x/y from the location cell's map link for venue upsert."""
-    raw = api_get(f"games/{game_id}")
-    if not raw:
+    data = api_data(f"games/{game_id}")
+    if not data:
         return None
 
-    data = raw.get("data", raw) if isinstance(raw, dict) else {}
     headers = data.get("headers", []) or []
     keys = [(h.get("key") or "") for h in headers]
     regions = data.get("regions", []) or []
@@ -255,8 +422,7 @@ def fetch_game_detail(game_id, region_label, season):
         loc_lat = loc_link.get("y")
 
     subtitle = (data.get("subtitle") or "").strip() or None
-    phase = phase_from_label(subtitle or region_label)
-    league_label = norm_league(region_label) or region_label
+    phase = phase_from_label(subtitle or league_label)
 
     return {
         "game_id":       game_id,
@@ -271,7 +437,7 @@ def fetch_game_detail(game_id, region_label, season):
         "result":        result,
         "location":      location,
         "location_city": location_city,
-        "league_group":  region_label or None,
+        "league_group":  league_label or None,
         "subtitle":      subtitle,
         "phase":         phase,
         "league":        league_label,
@@ -314,9 +480,14 @@ def main():
         log.error("SUPABASE_SERVICE_KEY not set — aborting.")
         sys.exit(1)
 
-    log.info(f"Stage 1: sweep mode=current for season {CURRENT_SEASON}, next {DAYS_AHEAD} days…")
-    id_pairs = sweep_game_ids(CURRENT_SEASON, days=DAYS_AHEAD)
-    log.info(f"  Collected {len(id_pairs)} game IDs")
+    log.info(f"Stage 1a: league sweep for season {CURRENT_SEASON}, next {DAYS_AHEAD} days…")
+    id_pairs, seen_ids = sweep_leagues(CURRENT_SEASON)
+    log.info(f"  {len(id_pairs)} games from leagues")
+
+    log.info("Stage 1b: mode=current sweep (cup competitions)…")
+    cup_pairs = sweep_current(CURRENT_SEASON, seen_ids)
+    log.info(f"  {len(cup_pairs)} additional games from current sweep")
+    id_pairs.extend(cup_pairs)
 
     if not id_pairs:
         log.info("Nothing to fetch.")
@@ -325,8 +496,8 @@ def main():
     log.info(f"Stage 2: fetching details for {len(id_pairs)} games…")
     games = []
     skipped = 0
-    for i, (gid, region_label) in enumerate(id_pairs, 1):
-        row = fetch_game_detail(gid, region_label, CURRENT_SEASON)
+    for i, (gid, league_label) in enumerate(id_pairs, 1):
+        row = fetch_game_detail(gid, league_label, CURRENT_SEASON)
         if row:
             games.append(row)
         else:
@@ -347,8 +518,8 @@ def main():
     if games:
         venues = split_venues(games)
         if venues:
-            sb_insert_ignore("venues", venues)
-            log.info(f"  {len(venues)} unique venues sent (existing ignored)")
+            sb_insert_ignore("venues", venues, conflict_col="name")
+            log.info(f"  {len(venues)} venues sent (existing kept untouched)")
 
         sb_upsert("fb_games", games)
         log.info(f"Upserted {len(games)} games to Supabase fb_games")
