@@ -26,6 +26,21 @@ log = logging.getLogger(__name__)
 SESSION = requests.Session()
 
 
+def season_from_date(iso_date):
+    """Saison = Startjahr, so wie fb_games es seit 2005 durchgehend hält.
+
+    Eine Saison laeuft von August bis Mai: ein Spiel im September 2026 gehoert
+    zu season 2026, ein Playoff-Spiel im April 2027 ebenfalls. Nicht von der
+    SU-API uebernehmen — die fuehrt ihre Saison 2025 bis in den September 2026
+    hinein, wodurch der erste Spieltag der neuen Saison falsch einsortiert wird.
+    """
+    try:
+        d = datetime.strptime(iso_date, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        d = datetime.now()
+    return d.year if d.month >= 7 else d.year - 1
+
+
 def get_cached_games():
     """Read finished games from live_games_cache (last 3 days)."""
     if not SUPABASE_SERVICE_KEY:
@@ -182,6 +197,9 @@ def sync_games_to_supabase(conn, game_ids):
         lu = lineup_lookup.get(g["game_id"], {})
         g["home_lineup"] = lu.get("home_lineup", [])
         g["away_lineup"] = lu.get("away_lineup", [])
+        # Gleiche Normalisierung wie bei Goals und Penalties — sonst steht in
+        # fb_games "Herren L-UPL", waehrend fb_goals "Herren NLA" fuehrt.
+        g["league"] = nl(g.get("league"))
     if games:
         _sb_upsert("fb_games", games)
     log.info(f"    fb_games: {len(games)} rows")
@@ -252,7 +270,6 @@ def sync_games_to_supabase(conn, game_ids):
 
 def run():
     log.info("=== Fast Daily Refresh ===")
-    season = 2025
 
     cached = get_cached_games()
     log.info(f"  {len(cached)} finished games in cache (last 3 days)")
@@ -288,6 +305,9 @@ def run():
         home_name = detail["home_name"]
         away_name = detail["away_name"]
         iso_date = g["date"]
+
+        # Saison pro Spiel aus dem Spieldatum ableiten, nicht global setzen.
+        season = season_from_date(iso_date)
 
         weekday_map = {0: "Mo", 1: "Di", 2: "Mi", 3: "Do", 4: "Fr", 5: "Sa", 6: "So"}
         try:
@@ -327,7 +347,7 @@ def run():
         total_pen += np
 
         imported.append(gid)
-        log.info(f"    ✓ {home_name} vs {away_name} [{iso_date}] {ng}G {np}P ({g['league']})")
+        log.info(f"    ✓ {home_name} vs {away_name} [{iso_date}] {ng}G {np}P ({g['league']}, season {season})")
 
     log.info(f"\n── Results ─────────────────")
     log.info(f"  Imported: {len(imported)} games, {total_goals} goals, {total_pen} penalties")
