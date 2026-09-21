@@ -1,4 +1,3 @@
-
 """
 fetch_lupl.py
 =============
@@ -342,6 +341,9 @@ def get_db():
         ("penalties", "player_id", "INTEGER"),
         ("penalties", "player_name", "TEXT"),
         ("games", "subtitle", "TEXT"),
+        # 'lineup' = official game lineup, 'roster' = team roster used as a
+        # stand-in because the lineup wasn't published. NULL = old rows (lineup).
+        ("lineups", "source", "TEXT"),
     ]
     for table, col, typ in migrations:
         try:
@@ -606,13 +608,16 @@ def store_game(conn, game_id, row, season, league_label, league_group_override=N
 # FETCH + STORE GOALS
 # ══════════════════════════════════════════════════════════════════════
 
-_PEN_RE = re.compile(r"^(\d+)'-Strafe(?:\s*\(([^)]*)\))?$")
+_PEN_RE = re.compile(r"^(\d+)'(?:\s*\+\s*(\d+)')?-Strafe(?:\s*\(([^)]*)\))?$")
 
 def parse_penalty(event_raw):
-    """Return (duration_min, reason) or (None, None) if not a penalty."""
+    """Return (duration_min, reason) or (None, None) if not a penalty.
+    Formats seen in the API: "2'-Strafe (…)", "10'-Strafe (…)" and
+    "2'+2'-Strafe (…)" — the last one used to be dropped; stored as 4 min."""
     m = _PEN_RE.match(event_raw.strip())
     if m:
-        return int(m.group(1)), (m.group(2) or "").strip() or "Unbekannt"
+        minutes = int(m.group(1)) + int(m.group(2) or 0)
+        return minutes, (m.group(3) or "").strip() or "Unbekannt"
     return None, None
 
 def fetch_and_store_goals(conn, game_id, home_id, away_id,
@@ -1033,59 +1038,157 @@ def _make_abbrevs(full_name):
     return abbrevs
 
 
-def build_lineup_map(conn, game_id, home_id, away_id, home_name, away_name, season, date):
+# Per the API docs, GET games/:id/teams/:is_home/players takes 0 = HOME, 1 = AWAY.
+API_SIDE = {"home": 0, "away": 1}
+
+# A side with fewer players than this counts as "lineup not published".
+# Full lineups have 15–25 players; the missing ones come back with 0–6.
+MIN_LINEUP = 10
+
+# Leagues where the roster may stand in for a missing lineup — mirrors
+# fantasy_competitions.leagues. Everywhere else a roster is not a lineup.
+FANTASY_LEAGUES = {
+    "Herren NLA", "Herren SML", "Herren L-UPL", "L-UPL Herren",
+    "Damen NLA",  "Damen SML",  "Damen L-UPL",  "L-UPL Damen",
+}
+
+
+def _parse_player_rows(raw):
+    """Parse a lineup or roster TABLE response → [(jersey, position, name, pid)].
+    Both endpoints share the first three columns: number, position, name(+link)."""
+    out = []
+    if not raw:
+        return out
+    for region in unwrap(raw).get("regions", []):
+        for row in region.get("rows", []):
+            cells = row.get("cells", [])
+            if len(cells) < 3:
+                continue
+            jersey   = cell_text(cells[0]) or None
+            # position cell may have ["Verteidiger"] or ["Verteidiger","Captain"] or [None]
+            pos_list = cells[1].get("text", []) if isinstance(cells[1], dict) else []
+            position = next((p for p in pos_list if p and p != "Nicht bekannt"), None)
+            player   = cell_text(cells[2]) or None
+            if not player:
+                continue
+            pid = None
+            try:
+                pid = cells[2].get("link", {}).get("ids", [None])[0]
+            except Exception:
+                pass
+            out.append((jersey, position, player, pid))
+    return out
+
+
+def fetch_roster(team_id, season):
+    """Current squad list of a team (GET teams/:team_id/players?season=)."""
+    return _parse_player_rows(api_get(f"teams/{team_id}/players", {"season": season}))
+
+
+def fetch_fantasy_pool(team_id):
+    """Active fantasy players of a team from Supabase → [(jersey, position, name, pid)].
+
+    The pool is kept in sync with myapp, so it covers players the swiss
+    unihockey roster is missing (e.g. Wiler's API roster has 17 players).
+    Fantasy player_id == swiss unihockey player_id, so rows dedupe by ID."""
+    if not SUPABASE_SERVICE_KEY:
+        return []
+    try:
+        r = SESSION.get(
+            f"{SUPABASE_URL}/rest/v1/fantasy_players",
+            params={"select": "player_id,display_name",
+                    "team_id": f"eq.{team_id}", "is_active": "is.true"},
+            headers={"apikey": SUPABASE_SERVICE_KEY,
+                     "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+            timeout=15,
+        )
+        r.raise_for_status()
+    except Exception as e:
+        log.warning(f"    fantasy pool fetch failed for team {team_id}: {e}")
+        return []
+    # position stays None: the pool uses GK/DEF/FWD, lineups use the API's wording
+    return [(None, None, p["display_name"], p["player_id"]) for p in r.json()]
+
+
+def build_lineup_map(conn, game_id, home_id, away_id, home_name, away_name, season, date,
+                     roster_fallback=False, report=None):
     """Fetch lineups for BOTH teams, store in SQLite, return name→ID map.
 
+    roster_fallback: if a side has fewer than MIN_LINEUP players (lineup not
+      published by swiss unihockey), add that team's swiss unihockey roster
+      (source='roster') and then any active fantasy players still missing
+      (source='pool'). Only enable for FANTASY_LEAGUES.
+    report: optional dict, filled per side with
+      {"lineup": n, "roster": n_added, "pool": n_added, "total": n}
+
     Returns dict: (abbrev_or_full, team_raw) → (full_name, player_id)
-    Collisions (same abbreviation, same team) are marked (None, None).
+    keyed by the player's REAL team. Collisions (same abbreviation, same team)
+    are marked (None, None).
     """
     name_map = {}
 
-    for is_home, team_id, team_name in [(1, home_id, home_name), (0, away_id, away_name)]:
+    sides = [
+        # side,  team_id, team_name, other_id, other_name
+        ("home", home_id, home_name, away_id, away_name),
+        ("away", away_id, away_name, home_id, home_name),
+    ]
+    for side, team_id, team_name, other_id, other_name in sides:
         time.sleep(SLEEP)
-        raw = api_get(f"games/{game_id}/teams/{is_home}/players")
-        if not raw:
-            continue
-        for region in unwrap(raw).get("regions", []):
-            for row in region.get("rows", []):
-                cells = row.get("cells", [])
-                if len(cells) < 3:
-                    continue
-                jersey   = cell_text(cells[0]) or None
-                pos_list = cells[1].get("text", []) if isinstance(cells[1], dict) else []
-                position = next((p for p in pos_list if p), None)
-                player   = cell_text(cells[2]) or None
-                if not player:
-                    continue
-                pid = None
-                try:
-                    pid = cells[2].get("link", {}).get("ids", [None])[0]
-                except Exception:
-                    pass
+        raw = api_get(f"games/{game_id}/teams/{API_SIDE[side]}/players")
+        players = [(j, pos, name, pid, "lineup") for j, pos, name, pid in _parse_player_rows(raw)]
+        n_lineup = len(players)
 
-                # Store in SQLite lineups table
-                try:
-                    conn.execute("""
-                        INSERT OR IGNORE INTO lineups
-                          (game_id, team_id, team_raw, player_raw, player_id,
-                           jersey_number, position, season, date)
-                        VALUES (?,?,?,?,?,?,?,?,?)
-                    """, (game_id, team_id, team_name, player, pid,
-                          jersey, position, season, date))
-                except Exception:
-                    pass
+        n_roster = n_pool = 0
+        if roster_fallback and n_lineup < MIN_LINEUP:
+            time.sleep(SLEEP)
+            have = {p[3] for p in players if p[3]}
+            extra = [(j, pos, name, pid, "roster") for j, pos, name, pid in fetch_roster(team_id, season)
+                     if pid and pid not in have]
+            players += extra
+            n_roster = len(extra)
 
-                # Exact full name key
-                name_map[(player, team_name)] = (player, pid)
+            have |= {p[3] for p in extra}
+            pool = [(j, pos, name, pid, "pool") for j, pos, name, pid in fetch_fantasy_pool(team_id)
+                    if pid and pid not in have]
+            players += pool
+            n_pool = len(pool)
+            log.warning(f"    {team_name}: lineup has {n_lineup} players → "
+                        f"added {n_roster} from the roster, {n_pool} from the fantasy pool")
 
-                # All possible abbreviated forms
-                for abbrev in _make_abbrevs(player):
-                    key = (abbrev, team_name)
-                    if key in name_map:
-                        if name_map[key][0] != player:
-                            name_map[key] = (None, None)  # collision
-                    else:
-                        name_map[key] = (player, pid)
+        if report is not None:
+            report[side] = {"lineup": n_lineup, "roster": n_roster, "pool": n_pool,
+                            "total": len(players)}
+
+        for jersey, position, player, pid, source in players:
+            # LEGACY STORAGE CONVENTION — do not "fix" in isolation:
+            # lineups.team_id / team_raw have always held the OTHER team (the old
+            # code requested is_home=1 for the home side, but 1 = away in the API).
+            # Both Supabase syncs swap it back. Changing this requires migrating
+            # the whole SQLite lineups table and both syncs in one go.
+            try:
+                conn.execute("""
+                    INSERT OR IGNORE INTO lineups
+                      (game_id, team_id, team_raw, player_raw, player_id,
+                       jersey_number, position, season, date, source)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, (game_id, other_id, other_name, player, pid,
+                      jersey, position, season, date, source))
+            except Exception:
+                pass
+
+            # Name map keyed by the player's REAL team, so resolve_player's
+            # team-scoped lookup works (before, it always fell through to the
+            # any-team fallback and could pick a same-named opponent).
+            name_map[(player, team_name)] = (player, pid)
+
+            # All possible abbreviated forms
+            for abbrev in _make_abbrevs(player):
+                key = (abbrev, team_name)
+                if key in name_map:
+                    if name_map[key][0] != player:
+                        name_map[key] = (None, None)  # collision
+                else:
+                    name_map[key] = (player, pid)
 
     return name_map
 
@@ -1404,10 +1507,11 @@ def sync_to_supabase(conn):
     log.info(f"    fb_penalties: {len(pen_rows)} rows synced")
 
     # ── Players (unique players from lineups) ─────────────────────────
+    # Roster stand-in rows (source='roster') are not appearances.
     player_rows = []
     for row in conn.execute("""
         SELECT player_id, player_raw, position,
-               COUNT(*) as gp
+               SUM(CASE WHEN COALESCE(source, 'lineup') = 'lineup' THEN 1 ELSE 0 END) as gp
         FROM lineups
         WHERE player_id IS NOT NULL
         GROUP BY player_id

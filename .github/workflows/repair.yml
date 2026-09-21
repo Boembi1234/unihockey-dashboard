@@ -1,0 +1,99 @@
+name: Repair games
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: fetch + report only, write nothing'
+        type: boolean
+        default: true
+      fix_games_played:
+        description: 'Also rewrite fb_players.games_played for ALL players'
+        type: boolean
+        default: false
+      game_ids:
+        description: 'Game IDs, space-separated (empty = fantasy round 2 + 1097674)'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+# Shared with refresh.yml: both download, modify and re-upload the same DB,
+# so they must never run at the same time.
+concurrency:
+  group: lupl-db
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Unlike refresh.yml this must NOT fall back to a fresh DB: every game
+      # would be "not in SQLite — skipped", and a real run would then upload
+      # an empty DB over the real one.
+      - name: Download DB from release (required)
+        run: |
+          gh release download update --pattern "*.db" --dir .
+          test -s swiss_floorball_lupl.db
+          echo "DB restored from release"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Show DB state
+        run: |
+          ls -l swiss_floorball_lupl.db
+          python -c "import sqlite3; c = sqlite3.connect('swiss_floorball_lupl.db'); print('games:', c.execute('SELECT COUNT(*) FROM games').fetchone()[0], '| latest:', c.execute('SELECT MAX(date) FROM games').fetchone()[0])"
+
+      # The release is deleted and re-created below; keep the pre-repair DB
+      # so a failed upload (or a bad repair) can be undone.
+      - name: Back up DB before repair
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-before-repair
+          path: swiss_floorball_lupl.db
+          retention-days: 30
+
+      # The key is needed in dry-run mode too: the fantasy-pool lookup reads
+      # from Supabase, without it the dry run shows wrong lineup numbers.
+      - name: Repair games
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ "$FIX_GAMES_PLAYED" = "true" ]; then args+=(--fix-games-played); fi
+          for gid in $GAME_IDS; do
+            [[ "$gid" =~ ^[0-9]+$ ]] || { echo "Invalid game id: $gid"; exit 1; }
+            args+=("$gid")
+          done
+          echo "python repair_games.py ${args[*]}"
+          python repair_games.py "${args[@]}"
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FIX_GAMES_PLAYED: ${{ inputs.fix_games_played }}
+          GAME_IDS: ${{ inputs.game_ids }}
+
+      # Same as refresh.yml, so the next refresh restores exactly this DB.
+      - name: Upload repaired DB to release
+        if: ${{ !inputs.dry_run }}
+        run: |
+          gh release delete update --yes 2>/dev/null || true
+          gh release create update swiss_floorball_lupl.db \
+            --title "DB Cache" --notes "Auto-updated DB" --prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

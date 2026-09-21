@@ -17,7 +17,7 @@ from fetch_lupl import (
     get_db, store_game, fetch_and_store_goals,
     build_lineup_map, api_get, unwrap, SLEEP,
     SUPABASE_URL, SUPABASE_SERVICE_KEY,
-    _sb_upsert, _batched,
+    _sb_upsert, _batched, FANTASY_LEAGUES,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
@@ -179,6 +179,7 @@ def sync_games_to_supabase(conn, game_ids):
     ph = ",".join("?" * len(game_ids))
 
     # Lineups — store player_ids, swap because API stores with reversed team_ids
+    # (see LEGACY STORAGE CONVENTION in fetch_lupl.build_lineup_map)
     lineup_lookup = {}
     for gid, pid, is_home in conn.execute(
         f"SELECT l.game_id, l.player_id, "
@@ -249,12 +250,18 @@ def sync_games_to_supabase(conn, game_ids):
         _sb_upsert("fb_penalties", pen_rows)
     log.info(f"    fb_penalties: {len(pen_rows)} rows")
 
-    # Players — sync unique players from lineups for imported games
+    # Players — everyone who appears in these games, but games_played is the
+    # total over ALL games in SQLite. (Counting only this batch used to reset
+    # career totals to 1 on every run.) Roster stand-in rows don't count.
     player_rows = []
     for row in conn.execute(f"""
-        SELECT player_id, player_raw, position, COUNT(*) as gp
+        SELECT player_id, player_raw, position,
+               SUM(CASE WHEN COALESCE(source, 'lineup') = 'lineup' THEN 1 ELSE 0 END) AS gp
         FROM lineups
-        WHERE player_id IS NOT NULL AND game_id IN ({ph})
+        WHERE player_id IN (
+            SELECT DISTINCT player_id FROM lineups
+            WHERE player_id IS NOT NULL AND game_id IN ({ph})
+        )
         GROUP BY player_id
     """, game_ids):
         player_rows.append({
@@ -263,8 +270,8 @@ def sync_games_to_supabase(conn, game_ids):
             "position": row[2],
             "games_played": row[3],
         })
-    if player_rows:
-        _sb_upsert("fb_players", player_rows)
+    for batch in _batched(player_rows, 500):
+        _sb_upsert("fb_players", batch)
     log.info(f"    fb_players: {len(player_rows)} rows")
 
 
@@ -315,7 +322,15 @@ def run():
         except Exception:
             weekday = ""
 
-        # Store game in SQLite
+        # Fantasy leagues: if swiss unihockey hasn't published a lineup, use the
+        # team roster + fantasy pool instead, so goals resolve and the players
+        # count as played.
+        roster_fb = g["league"] in FANTASY_LEAGUES
+
+        # Game + lineups + events are ONE transaction: if any step fails, the
+        # game is rolled back completely and retried on the next run. (Before,
+        # the game was committed first — a failed events call left it in SQLite
+        # without goals, and skip-if-exists meant it was never retried.)
         try:
             conn.execute("""
                 INSERT OR IGNORE INTO games
@@ -326,28 +341,44 @@ def run():
                   iso_date, weekday, detail["time"], season, g["league"],
                   detail.get("league_group"), detail["result"], detail["location"],
                   detail.get("phase", "Qualifikation"), subtitle))
+
+            # Fetch lineups FIRST → build name→ID map
+            lineup_report = {}
+            lineup_map = build_lineup_map(conn, gid, home_id, away_id,
+                                          home_name, away_name, season, iso_date,
+                                          roster_fallback=roster_fb, report=lineup_report)
+
+            if roster_fb and min(s["total"] for s in lineup_report.values()) == 0:
+                conn.rollback()
+                log.warning(f"    {gid}: no lineup AND no roster for one side — rolled back, retry next run")
+                continue
+
+            # Fetch goals + penalties with ID resolution
+            time.sleep(SLEEP)
+            result = fetch_and_store_goals(conn, gid, home_id, away_id,
+                                           home_name, away_name, iso_date, weekday, season,
+                                           lineup_map=lineup_map)
+            if not isinstance(result, tuple):
+                conn.rollback()
+                log.warning(f"    {gid}: game events fetch failed — rolled back, retry next run")
+                continue
+
             conn.commit()
         except Exception as e:
-            log.warning(f"    Insert error for {gid}: {e}")
+            conn.rollback()
+            log.warning(f"    Import error for {gid}: {e}")
             continue
 
-        # Fetch lineups FIRST → build name→ID map
-        lineup_map = build_lineup_map(conn, gid, home_id, away_id,
-                                       home_name, away_name, season, iso_date)
-        conn.commit()
-
-        # Fetch goals + penalties with ID resolution
-        time.sleep(SLEEP)
-        result = fetch_and_store_goals(conn, gid, home_id, away_id,
-                                       home_name, away_name, iso_date, weekday, season,
-                                       lineup_map=lineup_map)
-        ng, np = result if isinstance(result, tuple) else (0, 0)
-        conn.commit()
+        ng, np = result
         total_goals += ng
         total_pen += np
 
         imported.append(gid)
-        log.info(f"    ✓ {home_name} vs {away_name} [{iso_date}] {ng}G {np}P ({g['league']}, season {season})")
+        lu = " / ".join(
+            f"{s['lineup']}" + (f"+{s['roster']}r" if s["roster"] else "") + (f"+{s['pool']}p" if s["pool"] else "")
+            for s in (lineup_report.get("home"), lineup_report.get("away")) if s)
+        log.info(f"    ✓ {home_name} vs {away_name} [{iso_date}] {ng}G {np}P lineup {lu} "
+                 f"({g['league']}, season {season})")
 
     log.info(f"\n── Results ─────────────────")
     log.info(f"  Imported: {len(imported)} games, {total_goals} goals, {total_pen} penalties")

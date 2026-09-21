@@ -8,6 +8,12 @@ on:
 permissions:
   contents: write
 
+# Shared with repair.yml: both download, modify and re-upload the same DB,
+# so they must never run at the same time.
+concurrency:
+  group: lupl-db
+  cancel-in-progress: false
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
