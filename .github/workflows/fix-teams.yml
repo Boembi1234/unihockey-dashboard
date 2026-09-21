@@ -1,0 +1,88 @@
+name: Fix team credits
+
+# Re-credits goals and penalties that the old importer gave to the away team
+# (see fix_teams.py) — in the SQLite DB and in Supabase fb_goals / fb_penalties.
+# Only the team columns change. Safe to re-run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: report only, write nothing'
+        type: boolean
+        default: true
+      target:
+        description: 'What to fix'
+        type: choice
+        options: [both, sqlite, supabase]
+        default: both
+
+permissions:
+  contents: write
+
+# Shared with refresh.yml and repair.yml: they download, modify and re-upload
+# the same DB, so they must never run at the same time.
+concurrency:
+  group: lupl-db
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Must NOT fall back to a fresh DB — a real run would upload an empty
+      # DB over the real one.
+      - name: Download DB from release (required)
+        run: |
+          gh release download update --pattern "*.db" --dir .
+          test -s swiss_floorball_lupl.db
+          echo "DB restored from release"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Show DB state
+        run: |
+          ls -l swiss_floorball_lupl.db
+          python -c "import sqlite3; c = sqlite3.connect('swiss_floorball_lupl.db'); print('games:', c.execute('SELECT COUNT(*) FROM games').fetchone()[0], '| latest:', c.execute('SELECT MAX(date) FROM games').fetchone()[0])"
+
+      - name: Back up DB before fix
+        if: ${{ !inputs.dry_run && inputs.target != 'supabase' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-before-team-fix
+          path: swiss_floorball_lupl.db
+          retention-days: 30
+
+      - name: Fix team credits
+        run: |
+          args=(--target "$TARGET")
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          echo "python fix_teams.py ${args[*]}"
+          python fix_teams.py "${args[@]}"
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          TARGET: ${{ inputs.target }}
+
+      # Same as refresh.yml / repair.yml, so the next refresh restores exactly this DB.
+      - name: Upload fixed DB to release
+        if: ${{ !inputs.dry_run && inputs.target != 'supabase' }}
+        run: |
+          gh release delete update --yes 2>/dev/null || true
+          gh release create update swiss_floorball_lupl.db \
+            --title "DB Cache" --notes "Auto-updated DB" --prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
