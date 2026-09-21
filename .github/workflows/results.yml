@@ -1,0 +1,62 @@
+name: Fetch results
+
+# Writes the FINAL result of finished games to Supabase fb_games — for every
+# league, not only the ones fetch_daily.py imports (see fetch_results.py).
+# Also moves postponed games to their new date. Touches Supabase only, not the
+# SQLite DB, so it is not part of the lupl-db concurrency group.
+
+on:
+  schedule:
+    # GitHub starts scheduled runs late (often by hours), so these are rough.
+    - cron: '0 6 * * *'     # morning: whatever was entered overnight
+    - cron: '0 13 * * *'    # game-day afternoon
+    - cron: '0 18 * * *'    # game-day evening
+    - cron: '30 21 * * *'   # 23:30 Swiss time: the evening games
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: report only, write nothing'
+        type: boolean
+        default: false
+      days:
+        description: 'Look back this many days'
+        type: string
+        default: '21'
+      game_ids:
+        description: 'Only these game ids (comma-separated) instead of the date window'
+        type: string
+        default: ''
+
+concurrency:
+  group: fb-results
+  cancel-in-progress: false
+
+jobs:
+  results:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Fetch results and push to Supabase
+        run: |
+          args=(--days "${DAYS:-21}")
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ -n "$GAME_IDS" ]; then args+=(--game-ids "$GAME_IDS"); fi
+          echo "python fetch_results.py ${args[*]}"
+          python fetch_results.py "${args[@]}"
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          DAYS: ${{ inputs.days }}
+          GAME_IDS: ${{ inputs.game_ids }}

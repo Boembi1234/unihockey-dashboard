@@ -19,6 +19,7 @@ from fetch_lupl import (
     SUPABASE_URL, SUPABASE_SERVICE_KEY,
     _sb_upsert, _batched, FANTASY_LEAGUES,
 )
+from game_result import check_result, REVIEW, NONE
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
@@ -141,10 +142,16 @@ def fetch_game_row(game_id):
     home_name, home_ids = cell_val("home_name")
     away_name, away_ids = cell_val("away_name")
     result_text, _ = cell_val("result")
+    # The whole result cell — ["0:0", "(1:4, 1:4, 1:4)"] — for check_result()
+    res_idx = key_to_idx.get("result")
+    res_cell = cells[res_idx] if res_idx is not None and res_idx < len(cells) else None
+    result_parts = (res_cell.get("text") if isinstance(res_cell, dict) else None) or [result_text]
     time_text, _ = cell_val("time")
     location_text, _ = cell_val("location")
 
     if not home_name or not away_name or not result_text:
+        return None, None
+    if check_result(result_parts)[1] == NONE:    # "-:-": cancelled, nothing to import
         return None, None
 
     home_id = home_ids[0] if home_ids else 0
@@ -181,11 +188,30 @@ def fetch_game_row(game_id):
         "home_name": home_name,
         "away_name": away_name,
         "result": result_text,
+        "result_parts": result_parts,
         "time": time_text,
         "location": location_text,
         "phase": phase,
         "league_group": league_group,
     }, subtitle
+
+
+def _existing_results(game_ids):
+    """{game_id: result} for the fb_games rows that already have a result."""
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    }
+    found = {}
+    for batch in _batched([str(g) for g in game_ids], 150):
+        url = (f"{SUPABASE_URL}/rest/v1/fb_games?select=game_id,result"
+               f"&result=not.is.null&game_id=in.({','.join(batch)})")
+        r = SESSION.get(url, headers=headers)
+        if r.status_code != 200:
+            log.error(f"    fb_games read failed [{r.status_code}]: {r.text[:300]}")
+            r.raise_for_status()
+        found.update({str(row["game_id"]): row["result"] for row in r.json()})
+    return found
 
 
 def sync_games_to_supabase(conn, game_ids):
@@ -214,9 +240,18 @@ def sync_games_to_supabase(conn, game_ids):
 
     # Games
     games = [dict(r) for r in conn.execute(f"SELECT * FROM games WHERE game_id IN ({ph})", game_ids)]
+    # A result that is already in fb_games stays: it may have been entered or
+    # corrected by hand, and Tipps have been scored against it.
+    kept_results = _existing_results(game_ids)
     # Goals and penalties reuse the game's season, so the three tables always agree.
     season_by_game = {}
     for g in games:
+        kept = kept_results.get(str(g["game_id"]))
+        if kept is not None:
+            if kept != g.get("result"):
+                log.warning(f"    {g['game_id']}: fb_games already has result {kept!r}, "
+                            f"SQLite has {g.get('result')!r} — keeping fb_games")
+            g["result"] = kept
         g["season"] = season_by_game[g["game_id"]] = _sync_season(g)
         lu = lineup_lookup.get(g["game_id"], {})
         g["home_lineup"] = lu.get("home_lineup", [])
@@ -387,6 +422,15 @@ def run():
                 conn.rollback()
                 log.warning(f"    {gid}: game events fetch failed — rolled back, retry next run")
                 continue
+
+            # A 0:0 from the API is never taken over (see game_result.py — 1096439
+            # came as 0:0 with 15 goals). The game and its goals are kept, the
+            # result stays open; fetch_results.py reports it until it is entered.
+            _, res_status, res_note = check_result(detail["result_parts"])
+            if res_status == REVIEW:
+                conn.execute("UPDATE games SET result = NULL WHERE game_id = ?", (gid,))
+                log.warning(f"    {gid}: result NOT taken over — {res_note} "
+                            f"({result[0]} goals imported). Enter it by hand in fb_games.")
 
             conn.commit()
         except Exception as e:

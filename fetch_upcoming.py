@@ -172,6 +172,23 @@ def sb_upsert(table, rows):
         r.raise_for_status()
 
 
+def sb_finished_game_ids(from_date):
+    """game_ids dated `from_date` or later that already have a result."""
+    ids, offset, page = set(), 0, 1000
+    while True:
+        url = (f"{SUPABASE_URL}/rest/v1/fb_games?select=game_id&date=gte.{from_date}"
+               f"&result=not.is.null&order=game_id&limit={page}&offset={offset}")
+        r = SESSION.get(url, headers=sb_headers(), timeout=60)
+        if r.status_code != 200:
+            log.error(f"  Supabase fb_games read failed [{r.status_code}]: {r.text[:300]}")
+            r.raise_for_status()
+        rows = r.json()
+        ids.update(str(row["game_id"]) for row in rows)
+        if len(rows) < page:
+            return ids
+        offset += page
+
+
 def sb_insert_ignore(table, rows, conflict_col):
     """Insert, silently skipping rows whose `conflict_col` already exists.
     The explicit on_conflict target is essential: without it PostgREST
@@ -406,9 +423,9 @@ def fetch_game_detail(game_id, league_label, season):
         return None
 
     time_raw = cell_text(by_key.get("time")) or None
-    result   = cell_text(by_key.get("result")) or None
-    if result in ("", "-", "-:-"):
-        result = None
+    # No `result`: while a game runs the API's result is the LIVE score, and
+    # the app scores Tipps against fb_games.result exactly once. Results are
+    # written by fetch_results.py, after the final whistle only.
 
     loc_cell = by_key.get("location") or {}
     location = cell_text(loc_cell) or None
@@ -434,7 +451,6 @@ def fetch_game_detail(game_id, league_label, season):
         "weekday":       weekday,
         "time":          time_raw,
         "season":        season,
-        "result":        result,
         "location":      location,
         "location_city": location_city,
         "league_group":  league_label or None,
@@ -512,6 +528,14 @@ def main():
         by_league[g["league"]] = by_league.get(g["league"], 0) + 1
     for label, n in sorted(by_league.items(), key=lambda x: (-x[1], x[0])):
         log.info(f"  {n:>4}  {label}")
+
+    # A game that has its result is closed — a run later on a game day must not
+    # rewrite the row (fetch_daily.py fills league / phase / lineups differently).
+    finished = sb_finished_game_ids(date.today().isoformat())
+    closed = [g for g in games if str(g["game_id"]) in finished]
+    if closed:
+        games = [g for g in games if str(g["game_id"]) not in finished]
+        log.info(f"  {len(closed)} games already have a result — left untouched")
 
     log.info(f"\nTotal: {len(games)} games to upsert ({skipped} skipped)")
 
