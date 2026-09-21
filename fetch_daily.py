@@ -41,6 +41,26 @@ def season_from_date(iso_date):
     return d.year if d.month >= 7 else d.year - 1
 
 
+def _sync_season(game):
+    """Season to send to Supabase for a games row: always derived from the date.
+
+    SQLite can hold a stale value — everything imported before 13.09.2026 was
+    stored with a hard-coded 2025, and a re-sync (repair_games.py) pushed that
+    into fb_games again, which dropped the game from the fantasy scoring.
+    Only an unparsable date falls back to the stored season.
+    """
+    try:
+        datetime.strptime(game["date"], "%Y-%m-%d")
+    except (ValueError, TypeError):
+        log.warning(f"    {game['game_id']}: unparsable date {game['date']!r} — keeping season {game['season']}")
+        return game["season"]
+    season = season_from_date(game["date"])
+    if season != game["season"]:
+        log.warning(f"    {game['game_id']}: SQLite has season {game['season']}, "
+                    f"date {game['date']} says {season} — syncing {season}")
+    return season
+
+
 def get_cached_games():
     """Read finished games from live_games_cache (last 3 days)."""
     if not SUPABASE_SERVICE_KEY:
@@ -194,7 +214,10 @@ def sync_games_to_supabase(conn, game_ids):
 
     # Games
     games = [dict(r) for r in conn.execute(f"SELECT * FROM games WHERE game_id IN ({ph})", game_ids)]
+    # Goals and penalties reuse the game's season, so the three tables always agree.
+    season_by_game = {}
     for g in games:
+        g["season"] = season_by_game[g["game_id"]] = _sync_season(g)
         lu = lineup_lookup.get(g["game_id"], {})
         g["home_lineup"] = lu.get("home_lineup", [])
         g["away_lineup"] = lu.get("away_lineup", [])
@@ -223,6 +246,7 @@ def sync_games_to_supabase(conn, game_ids):
     """, game_ids):
         raw = dict(r)
         raw["league"] = nl(raw.get("league"))
+        raw["season"] = season_by_game.get(raw["game_id"], raw.get("season"))
         goal_rows.append({c: raw.get(c) for c in GOAL_COLS})
     if goal_rows:
         _sb_upsert("fb_goals", goal_rows)
@@ -245,6 +269,7 @@ def sync_games_to_supabase(conn, game_ids):
     """, game_ids):
         raw = dict(r)
         raw["league"] = nl(raw.get("league"))
+        raw["season"] = season_by_game.get(raw["game_id"], raw.get("season"))
         pen_rows.append({c: raw.get(c) for c in PEN_COLS})
     if pen_rows:
         _sb_upsert("fb_penalties", pen_rows)
