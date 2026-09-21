@@ -6,7 +6,11 @@ on:
   workflow_dispatch:        # manual trigger
     inputs:
       since:
-        description: 'Reimport: take fb_games fixtures from this date on (YYYY-MM-DD). Empty = last 7 days'
+        description: 'Reimport: take fb_games fixtures from this date on (YYYY-MM-DD). Empty = last 21 days'
+        type: string
+        default: ''
+      until:
+        description: 'Reimport: ... up to this date (YYYY-MM-DD). Empty = today'
         type: string
         default: ''
       dry_run:
@@ -68,12 +72,14 @@ jobs:
         run: |
           args=(--max-minutes "${MAX_MINUTES:-150}")
           if [ -n "$SINCE" ]; then args+=(--since "$SINCE"); fi
+          if [ -n "$UNTIL" ]; then args+=(--until "$UNTIL"); fi
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           echo "python fetch_daily.py ${args[*]}"
           python fetch_daily.py "${args[@]}"
         env:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SINCE: ${{ inputs.since }}
+          UNTIL: ${{ inputs.until }}
           DRY_RUN: ${{ inputs.dry_run }}
           MAX_MINUTES: ${{ inputs.max_minutes }}
 

@@ -7,7 +7,8 @@ Which games — two sources, both only ever yield FINISHED games:
      fixtures of all leagues come from fetch_upcoming.py, the result from
      fetch_results.py (written after the final whistle only). This is what
      brings in 1.-5. Liga, KF, U14-U21 and the regional junior leagues.
-     `--since YYYY-MM-DD` widens the window (backfill).
+     `--since` / `--until` (YYYY-MM-DD) set the window by hand (reimport).
+     A game from this source waits for a complete lineup, see import_game().
 
 Flow:
 1. Sync whatever an earlier, aborted run imported but did not sync
@@ -35,8 +36,18 @@ log = logging.getLogger(__name__)
 
 SESSION = requests.Session()
 
-FIXTURE_DAYS = 7      # fixture source: how far back a normal run looks
-BATCH        = 100    # games per Supabase sync
+FIXTURE_DAYS  = 21            # fixture source: how far back a normal run looks
+FIXTURE_START = "2026-09-11"  # ... but never before the first weekend of 2026/27
+BATCH         = 100           # games per Supabase sync
+
+# swiss unihockey sometimes publishes only fragments of a lineup (outage since
+# 18.09.2026: 1-5 players a side, picked at random). Goals then get no player
+# ids. A fixture-source game whose smaller side has fewer than THIN_LINEUP
+# players is left for a later run; once it is LINEUP_WAIT_DAYS old it is
+# imported with what there is. On a healthy weekend ~4% of games are this thin.
+THIN_LINEUP      = 6
+LINEUP_WAIT_DAYS = 14
+DEFERRED         = "deferred"
 
 # Stats are imported for every league down to U14. Below that: no player stats.
 BELOW_U14 = {"Junioren E Regional", "Juniorinnen D Regional"}
@@ -143,23 +154,24 @@ def get_cached_games():
                     "id": gid,
                     "league": canonical_league(league_name),
                     "date": g.get("date", row.get("game_date", "")),
+                    "source": "cache",
                 })
     return games
 
 
-def get_fixture_games(since):
-    """Finished games from fb_games: dated `since`..today, with a result, in a
-    league we keep stats for. fetch_results.py only writes final results, so a
-    result means the game is over."""
+def get_fixture_games(since, until=None):
+    """Finished games from fb_games: dated `since`..`until` (today), with a
+    result, in a league we keep stats for. fetch_results.py only writes final
+    results, so a result means the game is over."""
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
     }
-    today = datetime.now().strftime("%Y-%m-%d")
+    until = min(until or "9999", datetime.now().strftime("%Y-%m-%d"))
     games, offset, page = [], 0, 1000
     while True:
         url = (f"{SUPABASE_URL}/rest/v1/fb_games?select=game_id,league,date"
-               f"&date=gte.{since}&date=lte.{today}&result=not.is.null"
+               f"&date=gte.{since}&date=lte.{until}&result=not.is.null"
                f"&order=game_id&limit={page}&offset={offset}")
         r = SESSION.get(url, headers=headers)
         if r.status_code != 200:
@@ -174,6 +186,7 @@ def get_fixture_games(since):
                 "id": str(row["game_id"]),
                 "league": FIXTURE_TO_STATS_LEAGUE.get(league, league),
                 "date": row["date"],
+                "source": "fixture",
             })
         if len(rows) < page:
             return games
@@ -492,9 +505,17 @@ def sync_batch(conn, game_ids):
 _WEEKDAYS = {0: "Mo", 1: "Di", 2: "Mi", 3: "Do", 4: "Fr", 5: "Sa", 6: "So"}
 
 
+def _age_days(iso_date):
+    try:
+        return (datetime.now() - datetime.strptime(iso_date, "%Y-%m-%d")).days
+    except (ValueError, TypeError):
+        return 10**6      # unknown date: no waiting
+
+
 def import_game(conn, g):
-    """Import one finished game into SQLite → (goals, penalties), or None if it
-    has to be retried on the next run. Game + lineups + events are ONE
+    """Import one finished game into SQLite → (goals, penalties), None if it
+    has to be retried on the next run, DEFERRED if it waits for its lineup.
+    Game + lineups + events are ONE
     transaction: if any step fails, the game is rolled back completely. (Before,
     the game was committed first — a failed events call left it in SQLite
     without goals, and skip-if-exists meant it was never retried.)"""
@@ -553,6 +574,15 @@ def import_game(conn, g):
             log.warning(f"    {gid}: no lineup AND no roster for one side — rolled back, retry next run")
             return None
 
+        # Fixture source: wait for a complete lineup (see THIN_LINEUP). Not for
+        # a forfeit — there never is a lineup.
+        if (g.get("source") == "fixture" and not roster_fb
+                and "ff" not in (detail["result"] or "").lower()
+                and min((s["lineup"] for s in lineup_report.values()), default=0) < THIN_LINEUP
+                and _age_days(iso_date) < LINEUP_WAIT_DAYS):
+            conn.rollback()
+            return DEFERRED
+
         # Fetch goals + penalties with ID resolution
         time.sleep(SLEEP)
         result = fetch_and_store_goals(conn, gid, home_id, away_id,
@@ -587,7 +617,7 @@ def import_game(conn, g):
     return ng, np
 
 
-def run(since=None, dry_run=False, max_minutes=0):
+def run(since=None, until=None, dry_run=False, max_minutes=0):
     started = time.monotonic()
     log.info(f"=== Daily Refresh{' (DRY RUN — nothing is imported or written)' if dry_run else ''} ===")
     if not SUPABASE_SERVICE_KEY:
@@ -611,8 +641,10 @@ def run(since=None, dry_run=False, max_minutes=0):
     log.info(f"  {len(cached)} finished games in cache (last 3 days)")
     if not since:
         since = (datetime.now() - timedelta(days=FIXTURE_DAYS)).strftime("%Y-%m-%d")
-    fixtures = get_fixture_games(since)
-    log.info(f"  {len(fixtures)} finished games in fb_games since {since} (leagues down to U14)")
+    since = max(since, FIXTURE_START)
+    fixtures = get_fixture_games(since, until)
+    log.info(f"  {len(fixtures)} finished games in fb_games from {since} to {until or 'today'} "
+             f"(leagues down to U14)")
 
     seen, candidates = set(), []
     for g in cached + fixtures:
@@ -641,6 +673,7 @@ def run(since=None, dry_run=False, max_minutes=0):
     # 3. Import, syncing every BATCH games
     imported, batch = 0, []
     total_goals = total_pen = skipped = 0
+    deferred = {}
     out_of_time = False
 
     for g in new_games:
@@ -650,6 +683,9 @@ def run(since=None, dry_run=False, max_minutes=0):
         result = import_game(conn, g)
         if result is None:
             skipped += 1
+            continue
+        if result == DEFERRED:
+            deferred[g["league"]] = deferred.get(g["league"], 0) + 1
             continue
         total_goals += result[0]
         total_pen += result[1]
@@ -667,8 +703,13 @@ def run(since=None, dry_run=False, max_minutes=0):
     log.info(f"\n── Results ─────────────────")
     log.info(f"  Imported: {imported} games, {total_goals} goals, {total_pen} penalties"
              f" ({skipped} skipped, retried next run)")
+    if deferred:
+        log.info(f"  Waiting for a complete lineup from swiss unihockey: {sum(deferred.values())} games "
+                 f"(checked again every run, imported as they are after {LINEUP_WAIT_DAYS} days)")
+        for league, n in sorted(deferred.items(), key=lambda x: (-x[1], x[0])):
+            log.info(f"    {n:>5}  {league}")
     if out_of_time:
-        left = len(new_games) - imported - skipped
+        left = len(new_games) - imported - skipped - sum(deferred.values())
         log.warning(f"  Stopped after {max_minutes} minutes — {left} games left for the next run")
     conn.close()
 
@@ -682,13 +723,17 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Import finished games with lineups, goals and penalties")
     ap.add_argument("--since", default="", help="fixture source from this date on (YYYY-MM-DD), "
                                                 f"default: the last {FIXTURE_DAYS} days")
+    ap.add_argument("--until", default="", help="fixture source up to this date (YYYY-MM-DD), default: today")
     ap.add_argument("--dry-run", action="store_true", help="only list what would be imported")
     ap.add_argument("--max-minutes", type=int, default=0,
                     help="stop importing after this many minutes (0 = no limit); the rest follows next run")
     args = ap.parse_args()
-    if args.since:
-        try:
-            datetime.strptime(args.since, "%Y-%m-%d")
-        except ValueError:
-            sys.exit(f"--since must be YYYY-MM-DD, got {args.since!r}")
-    run(since=args.since or None, dry_run=args.dry_run, max_minutes=args.max_minutes)
+    for name in ("since", "until"):
+        value = getattr(args, name)
+        if value:
+            try:
+                datetime.strptime(value, "%Y-%m-%d")
+            except ValueError:
+                sys.exit(f"--{name} must be YYYY-MM-DD, got {value!r}")
+    run(since=args.since or None, until=args.until or None,
+        dry_run=args.dry_run, max_minutes=args.max_minutes)
