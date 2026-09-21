@@ -1,12 +1,21 @@
-"""Fast daily refresh: import finished games from live_games_cache.
+"""Daily refresh: import finished games with lineups, goals and penalties.
+
+Which games — two sources, both only ever yield FINISHED games:
+  a. live_games_cache (last 3 days, "Spiel beendet"). The app fills it from the
+     SU API's mode=current, a curated selection: top leagues, U21, cups.
+  b. fb_games fixtures of the last FIXTURE_DAYS days that have a result. The
+     fixtures of all leagues come from fetch_upcoming.py, the result from
+     fetch_results.py (written after the final whistle only). This is what
+     brings in 1.-5. Liga, KF, U14-U21 and the regional junior leagues.
+     `--since YYYY-MM-DD` widens the window (backfill).
 
 Flow:
-1. Read live_games_cache from Supabase (last 3 days)
-2. Parse game IDs from the cached JSON (only "Spiel beendet")
-3. For each game not in SQLite: use store_game + fetch_and_store_goals from fetch_lupl
-4. Sync new games to Supabase
+1. Sync whatever an earlier, aborted run imported but did not sync
+2. For each game not in SQLite: game row + lineups + goals/penalties, one
+   transaction per game (fetch_lupl)
+3. Every BATCH games: sync them to Supabase and remember that they are synced
 """
-import sys, os, time, json, logging
+import sys, os, re, time, json, logging, argparse
 from datetime import datetime, timedelta
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -25,6 +34,36 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
 
 SESSION = requests.Session()
+
+FIXTURE_DAYS = 7      # fixture source: how far back a normal run looks
+BATCH        = 100    # games per Supabase sync
+
+# Stats are imported for every league down to U14. Below that: no player stats.
+BELOW_U14 = {"Junioren E Regional", "Juniorinnen D Regional"}
+
+# fetch_upcoming.py names a few leagues differently from the cache. Stats have
+# always been filed under the cache's names, so the fixture source maps to them
+# ("Herren L-UPL" goes to Supabase as "Herren NLA", see sync_games_to_supabase).
+FIXTURE_TO_STATS_LEAGUE = {
+    "Herren NLA":          "Herren L-UPL",
+    "Damen NLA":           "Damen L-UPL",
+    "Mobiliar Cup Herren": "Mobiliar Unihockey Cup Männer",
+    "Mobiliar Cup Damen":  "Mobiliar Unihockey Cup Frauen",
+}
+
+_U21_NOSPACE_RE = re.compile(r"^(Junior(?:en|innen) U\d{2})([A-D])$")
+
+
+def canonical_league(name):
+    """Collapse whitespace; "Junioren U21A" → "Junioren U21 A". Since 19.09.2026
+    mode=current drops that space, which filed the same league under two names."""
+    name = " ".join((name or "").split())
+    return _U21_NOSPACE_RE.sub(r"\1 \2", name)
+
+
+def wanted_league(league):
+    low = (league or "").lower()
+    return bool(league) and "test" not in low and league not in BELOW_U14
 
 
 def season_from_date(iso_date):
@@ -102,10 +141,43 @@ def get_cached_games():
                 seen.add(gid)
                 games.append({
                     "id": gid,
-                    "league": league_name,
+                    "league": canonical_league(league_name),
                     "date": g.get("date", row.get("game_date", "")),
                 })
     return games
+
+
+def get_fixture_games(since):
+    """Finished games from fb_games: dated `since`..today, with a result, in a
+    league we keep stats for. fetch_results.py only writes final results, so a
+    result means the game is over."""
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    }
+    today = datetime.now().strftime("%Y-%m-%d")
+    games, offset, page = [], 0, 1000
+    while True:
+        url = (f"{SUPABASE_URL}/rest/v1/fb_games?select=game_id,league,date"
+               f"&date=gte.{since}&date=lte.{today}&result=not.is.null"
+               f"&order=game_id&limit={page}&offset={offset}")
+        r = SESSION.get(url, headers=headers)
+        if r.status_code != 200:
+            log.error(f"  fb_games read failed [{r.status_code}]: {r.text[:300]}")
+            r.raise_for_status()
+        rows = r.json()
+        for row in rows:
+            league = canonical_league(row.get("league"))
+            if not wanted_league(league) or not row.get("date"):
+                continue
+            games.append({
+                "id": str(row["game_id"]),
+                "league": FIXTURE_TO_STATS_LEAGUE.get(league, league),
+                "date": row["date"],
+            })
+        if len(rows) < page:
+            return games
+        offset += page
 
 
 def fetch_game_row(game_id):
@@ -214,10 +286,39 @@ def _existing_results(game_ids):
     return found
 
 
+def _sb_delete_games(table, game_ids):
+    """Delete the rows of these games from fb_goals / fb_penalties → rows deleted."""
+    assert table in ("fb_goals", "fb_penalties")
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Prefer": "return=representation",
+    }
+    deleted = 0
+    for batch in _batched([str(g) for g in game_ids], 100):
+        assert batch and all(g.isdigit() for g in batch)     # never an unfiltered DELETE
+        url = f"{SUPABASE_URL}/rest/v1/{table}?select=game_id&game_id=in.({','.join(batch)})"
+        r = SESSION.delete(url, headers=headers)
+        if r.status_code not in (200, 204):
+            log.error(f"    {table} delete failed [{r.status_code}]: {r.text[:300]}")
+            r.raise_for_status()
+        deleted += len(r.json()) if r.text else 0
+    return deleted
+
+
 def sync_games_to_supabase(conn, game_ids):
     """Push only the specified games + goals + penalties to Supabase."""
     if not SUPABASE_SERVICE_KEY or not game_ids:
         return
+
+    # fb_goals / fb_penalties have no natural key (goal_id is not sent), so an
+    # upsert cannot recognise rows it wrote before. Clearing the games first
+    # makes the sync repeatable: a run that died after syncing — or the app's
+    # admin import — no longer leaves every goal in there twice.
+    for table in ("fb_goals", "fb_penalties"):
+        n = _sb_delete_games(table, game_ids)
+        if n:
+            log.warning(f"    {table}: {n} rows of these games were already there — replaced")
 
     LEAGUE_MAP = {"Herren L-UPL": "Herren NLA", "Herren SML": "Herren NLA"}
     def nl(name): return LEAGUE_MAP.get(name, name) if name else name
@@ -335,130 +436,259 @@ def sync_games_to_supabase(conn, game_ids):
     log.info(f"    fb_players: {len(player_rows)} rows")
 
 
-def run():
-    log.info("=== Fast Daily Refresh ===")
+# ── Sync bookkeeping ─────────────────────────────────────────────────────────
+# A game is imported into SQLite first and synced to Supabase afterwards. With
+# a thousand games per weekend a run can die in between; `synced_games` is how
+# the next run knows what is still owed to Supabase.
 
-    cached = get_cached_games()
-    log.info(f"  {len(cached)} finished games in cache (last 3 days)")
+def ensure_sync_table(conn):
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='synced_games'").fetchone()
+    conn.execute("CREATE TABLE IF NOT EXISTS synced_games (game_id TEXT PRIMARY KEY, synced_at TEXT)")
+    if not exists:
+        # Everything imported before this table existed has been synced.
+        conn.execute("INSERT OR IGNORE INTO synced_games (game_id, synced_at) "
+                     "SELECT game_id, 'before 2026-09-22' FROM games")
+    conn.commit()
 
-    if not cached:
-        log.info("  Nothing to process.")
-        return
+
+def unsynced_games(conn):
+    return [r[0] for r in conn.execute(
+        "SELECT game_id FROM games WHERE game_id NOT IN (SELECT game_id FROM synced_games) "
+        "ORDER BY date, game_id")]
+
+
+def _mark_synced(conn, game_ids):
+    now = datetime.now().isoformat(timespec="seconds")
+    conn.executemany("INSERT OR REPLACE INTO synced_games (game_id, synced_at) VALUES (?, ?)",
+                     [(g, now) for g in game_ids])
+    conn.commit()
+
+
+def sync_batch(conn, game_ids):
+    """Sync and mark as synced. If the batch fails, go game by game so one bad
+    game cannot hold back the rest. Returns the game ids that failed."""
+    if not game_ids:
+        return []
+    try:
+        sync_games_to_supabase(conn, game_ids)
+        _mark_synced(conn, game_ids)
+        return []
+    except Exception as e:
+        log.error(f"    batch sync failed ({e}) — retrying game by game")
+    failed = []
+    for gid in game_ids:
+        try:
+            sync_games_to_supabase(conn, [gid])
+            _mark_synced(conn, [gid])
+        except Exception as e:
+            failed.append(gid)
+            log.error(f"    {gid}: sync failed, stays unsynced for the next run — {e}")
+    return failed
+
+
+# ── Import ───────────────────────────────────────────────────────────────────
+
+_WEEKDAYS = {0: "Mo", 1: "Di", 2: "Mi", 3: "Do", 4: "Fr", 5: "Sa", 6: "So"}
+
+
+def import_game(conn, g):
+    """Import one finished game into SQLite → (goals, penalties), or None if it
+    has to be retried on the next run. Game + lineups + events are ONE
+    transaction: if any step fails, the game is rolled back completely. (Before,
+    the game was committed first — a failed events call left it in SQLite
+    without goals, and skip-if-exists meant it was never retried.)"""
+    gid = g["id"]
+    time.sleep(SLEEP)
+
+    detail, subtitle = fetch_game_row(gid)
+    if not detail:
+        log.warning(f"    Could not fetch game {gid}")
+        return None
+
+    home_id = detail["home_id"]
+    away_id = detail["away_id"]
+    home_name = detail["home_name"]
+    away_name = detail["away_name"]
+    iso_date = g["date"]
+
+    # Saison pro Spiel aus dem Spieldatum ableiten, nicht global setzen.
+    season = season_from_date(iso_date)
+
+    try:
+        weekday = _WEEKDAYS.get(datetime.strptime(iso_date, "%Y-%m-%d").weekday(), "")
+    except Exception:
+        weekday = ""
+
+    # Same rule as fetch_upcoming.py — without it the sync would overwrite the
+    # city that is already in fb_games with NULL.
+    location = detail["location"]
+    location_city = location.split()[-1] if location else None
+
+    # Fantasy leagues: if swiss unihockey hasn't published a lineup, use the
+    # team roster + fantasy pool instead, so goals resolve and the players
+    # count as played.
+    roster_fb = g["league"] in FANTASY_LEAGUES
+
+    try:
+        conn.execute("""
+            INSERT OR IGNORE INTO games
+              (game_id, home_team_id, away_team_id, home_team_raw, away_team_raw,
+               date, weekday, time, season, league, league_group, result, location,
+               location_city, phase, subtitle)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (gid, home_id, away_id, home_name, away_name,
+              iso_date, weekday, detail["time"], season, g["league"],
+              detail.get("league_group"), detail["result"], location,
+              location_city, detail.get("phase", "Qualifikation"), subtitle))
+
+        # Fetch lineups FIRST → build name→ID map
+        lineup_report = {}
+        lineup_map = build_lineup_map(conn, gid, home_id, away_id,
+                                      home_name, away_name, season, iso_date,
+                                      roster_fallback=roster_fb, report=lineup_report)
+
+        if roster_fb and min(s["total"] for s in lineup_report.values()) == 0:
+            conn.rollback()
+            log.warning(f"    {gid}: no lineup AND no roster for one side — rolled back, retry next run")
+            return None
+
+        # Fetch goals + penalties with ID resolution
+        time.sleep(SLEEP)
+        result = fetch_and_store_goals(conn, gid, home_id, away_id,
+                                       home_name, away_name, iso_date, weekday, season,
+                                       lineup_map=lineup_map)
+        if not isinstance(result, tuple):
+            conn.rollback()
+            log.warning(f"    {gid}: game events fetch failed — rolled back, retry next run")
+            return None
+
+        # A 0:0 from the API is never taken over (see game_result.py — 1096439
+        # came as 0:0 with 15 goals). The game and its goals are kept, the
+        # result stays open; fetch_results.py reports it until it is entered.
+        _, res_status, res_note = check_result(detail["result_parts"])
+        if res_status == REVIEW:
+            conn.execute("UPDATE games SET result = NULL WHERE game_id = ?", (gid,))
+            log.warning(f"    {gid}: result NOT taken over — {res_note} "
+                        f"({result[0]} goals imported). Enter it by hand in fb_games.")
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        log.warning(f"    Import error for {gid}: {e}")
+        return None
+
+    ng, np = result
+    lu = " / ".join(
+        f"{s['lineup']}" + (f"+{s['roster']}r" if s["roster"] else "") + (f"+{s['pool']}p" if s["pool"] else "")
+        for s in (lineup_report.get("home"), lineup_report.get("away")) if s)
+    log.info(f"    ✓ {home_name} vs {away_name} [{iso_date}] {ng}G {np}P lineup {lu} "
+             f"({g['league']}, season {season})")
+    return ng, np
+
+
+def run(since=None, dry_run=False, max_minutes=0):
+    started = time.monotonic()
+    log.info(f"=== Daily Refresh{' (DRY RUN — nothing is imported or written)' if dry_run else ''} ===")
+    if not SUPABASE_SERVICE_KEY:
+        log.error("SUPABASE_SERVICE_KEY not set")
+        sys.exit(1)
 
     conn = get_db()
-    new_games = [g for g in cached if not conn.execute("SELECT 1 FROM games WHERE game_id=?", (g["id"],)).fetchone()]
+    ensure_sync_table(conn)
+
+    # 1. What an aborted run still owes Supabase
+    owed = unsynced_games(conn)
+    sync_failed = []
+    if owed:
+        log.info(f"  {len(owed)} games imported earlier but not synced yet")
+        if not dry_run:
+            for batch in _batched(owed, BATCH):
+                sync_failed += sync_batch(conn, batch)
+
+    # 2. Candidates: cache first, its league names win for games in both sources
+    cached = get_cached_games()
+    log.info(f"  {len(cached)} finished games in cache (last 3 days)")
+    if not since:
+        since = (datetime.now() - timedelta(days=FIXTURE_DAYS)).strftime("%Y-%m-%d")
+    fixtures = get_fixture_games(since)
+    log.info(f"  {len(fixtures)} finished games in fb_games since {since} (leagues down to U14)")
+
+    seen, candidates = set(), []
+    for g in cached + fixtures:
+        if g["id"] not in seen:
+            seen.add(g["id"])
+            candidates.append(g)
+    new_games = [g for g in candidates
+                 if not conn.execute("SELECT 1 FROM games WHERE game_id=?", (g["id"],)).fetchone()]
+    new_games.sort(key=lambda g: (g["date"], g["id"]))
     log.info(f"  {len(new_games)} new games to import")
 
-    if not new_games:
-        log.info("  All games already in DB.")
+    by_league = {}
+    for g in new_games:
+        by_league[g["league"]] = by_league.get(g["league"], 0) + 1
+    for league, n in sorted(by_league.items(), key=lambda x: (-x[1], x[0])):
+        log.info(f"    {n:>5}  {league}")
+
+    if dry_run or not new_games:
+        if not new_games:
+            log.info("  All games already in DB.")
         conn.close()
+        if sync_failed:
+            sys.exit(1)
         return
 
-    imported = []
-    total_goals = total_pen = 0
+    # 3. Import, syncing every BATCH games
+    imported, batch = 0, []
+    total_goals = total_pen = skipped = 0
+    out_of_time = False
 
     for g in new_games:
-        gid = g["id"]
-        time.sleep(SLEEP)
-
-        # Fetch game detail from API
-        detail, subtitle = fetch_game_row(gid)
-        if not detail:
-            log.warning(f"    Could not fetch game {gid}")
+        if max_minutes and (time.monotonic() - started) > max_minutes * 60:
+            out_of_time = True
+            break
+        result = import_game(conn, g)
+        if result is None:
+            skipped += 1
             continue
+        total_goals += result[0]
+        total_pen += result[1]
+        imported += 1
+        batch.append(g["id"])
+        if len(batch) >= BATCH:
+            log.info(f"\n── Syncing {len(batch)} games to Supabase ({imported}/{len(new_games)} imported)…")
+            sync_failed += sync_batch(conn, batch)
+            batch = []
 
-        home_id = detail["home_id"]
-        away_id = detail["away_id"]
-        home_name = detail["home_name"]
-        away_name = detail["away_name"]
-        iso_date = g["date"]
-
-        # Saison pro Spiel aus dem Spieldatum ableiten, nicht global setzen.
-        season = season_from_date(iso_date)
-
-        weekday_map = {0: "Mo", 1: "Di", 2: "Mi", 3: "Do", 4: "Fr", 5: "Sa", 6: "So"}
-        try:
-            weekday = weekday_map.get(datetime.strptime(iso_date, "%Y-%m-%d").weekday(), "")
-        except Exception:
-            weekday = ""
-
-        # Fantasy leagues: if swiss unihockey hasn't published a lineup, use the
-        # team roster + fantasy pool instead, so goals resolve and the players
-        # count as played.
-        roster_fb = g["league"] in FANTASY_LEAGUES
-
-        # Game + lineups + events are ONE transaction: if any step fails, the
-        # game is rolled back completely and retried on the next run. (Before,
-        # the game was committed first — a failed events call left it in SQLite
-        # without goals, and skip-if-exists meant it was never retried.)
-        try:
-            conn.execute("""
-                INSERT OR IGNORE INTO games
-                  (game_id, home_team_id, away_team_id, home_team_raw, away_team_raw,
-                   date, weekday, time, season, league, league_group, result, location, phase, subtitle)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (gid, home_id, away_id, home_name, away_name,
-                  iso_date, weekday, detail["time"], season, g["league"],
-                  detail.get("league_group"), detail["result"], detail["location"],
-                  detail.get("phase", "Qualifikation"), subtitle))
-
-            # Fetch lineups FIRST → build name→ID map
-            lineup_report = {}
-            lineup_map = build_lineup_map(conn, gid, home_id, away_id,
-                                          home_name, away_name, season, iso_date,
-                                          roster_fallback=roster_fb, report=lineup_report)
-
-            if roster_fb and min(s["total"] for s in lineup_report.values()) == 0:
-                conn.rollback()
-                log.warning(f"    {gid}: no lineup AND no roster for one side — rolled back, retry next run")
-                continue
-
-            # Fetch goals + penalties with ID resolution
-            time.sleep(SLEEP)
-            result = fetch_and_store_goals(conn, gid, home_id, away_id,
-                                           home_name, away_name, iso_date, weekday, season,
-                                           lineup_map=lineup_map)
-            if not isinstance(result, tuple):
-                conn.rollback()
-                log.warning(f"    {gid}: game events fetch failed — rolled back, retry next run")
-                continue
-
-            # A 0:0 from the API is never taken over (see game_result.py — 1096439
-            # came as 0:0 with 15 goals). The game and its goals are kept, the
-            # result stays open; fetch_results.py reports it until it is entered.
-            _, res_status, res_note = check_result(detail["result_parts"])
-            if res_status == REVIEW:
-                conn.execute("UPDATE games SET result = NULL WHERE game_id = ?", (gid,))
-                log.warning(f"    {gid}: result NOT taken over — {res_note} "
-                            f"({result[0]} goals imported). Enter it by hand in fb_games.")
-
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            log.warning(f"    Import error for {gid}: {e}")
-            continue
-
-        ng, np = result
-        total_goals += ng
-        total_pen += np
-
-        imported.append(gid)
-        lu = " / ".join(
-            f"{s['lineup']}" + (f"+{s['roster']}r" if s["roster"] else "") + (f"+{s['pool']}p" if s["pool"] else "")
-            for s in (lineup_report.get("home"), lineup_report.get("away")) if s)
-        log.info(f"    ✓ {home_name} vs {away_name} [{iso_date}] {ng}G {np}P lineup {lu} "
-                 f"({g['league']}, season {season})")
+    if batch:
+        log.info(f"\n── Syncing {len(batch)} games to Supabase…")
+        sync_failed += sync_batch(conn, batch)
 
     log.info(f"\n── Results ─────────────────")
-    log.info(f"  Imported: {len(imported)} games, {total_goals} goals, {total_pen} penalties")
-
-    if imported:
-        log.info("\n── Syncing to Supabase…")
-        sync_games_to_supabase(conn, imported)
-
+    log.info(f"  Imported: {imported} games, {total_goals} goals, {total_pen} penalties"
+             f" ({skipped} skipped, retried next run)")
+    if out_of_time:
+        left = len(new_games) - imported - skipped
+        log.warning(f"  Stopped after {max_minutes} minutes — {left} games left for the next run")
     conn.close()
+
+    if sync_failed:
+        log.error(f"  {len(sync_failed)} games could not be synced: {sync_failed[:20]}")
+        sys.exit(1)
     log.info("\n✓ Done!")
 
 
 if __name__ == "__main__":
-    run()
+    ap = argparse.ArgumentParser(description="Import finished games with lineups, goals and penalties")
+    ap.add_argument("--since", default="", help="fixture source from this date on (YYYY-MM-DD), "
+                                                f"default: the last {FIXTURE_DAYS} days")
+    ap.add_argument("--dry-run", action="store_true", help="only list what would be imported")
+    ap.add_argument("--max-minutes", type=int, default=0,
+                    help="stop importing after this many minutes (0 = no limit); the rest follows next run")
+    args = ap.parse_args()
+    if args.since:
+        try:
+            datetime.strptime(args.since, "%Y-%m-%d")
+        except ValueError:
+            sys.exit(f"--since must be YYYY-MM-DD, got {args.since!r}")
+    run(since=args.since or None, dry_run=args.dry_run, max_minutes=args.max_minutes)

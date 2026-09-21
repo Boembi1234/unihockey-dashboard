@@ -4,6 +4,19 @@ on:
   schedule:
     - cron: '0 3 * * *'   # Daily at 03:00 UTC (04:00 Swiss time)
   workflow_dispatch:        # manual trigger
+    inputs:
+      since:
+        description: 'Reimport: take fb_games fixtures from this date on (YYYY-MM-DD). Empty = last 7 days'
+        type: string
+        default: ''
+      dry_run:
+        description: 'Dry run: only list what would be imported'
+        type: boolean
+        default: false
+      max_minutes:
+        description: 'Stop importing after this many minutes; the rest follows on the next run'
+        type: string
+        default: '150'
 
 permissions:
   contents: write
@@ -17,19 +30,31 @@ concurrency:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 15     # Should finish in < 2 minutes
+    timeout-minutes: 200    # all leagues: ~3 s per game, a weekend is 1000+ games
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Download DB from release (if exists)
+      # Must NOT fall back to a fresh DB: the import would start from zero,
+      # upload an almost empty DB over the real one and reset games_played.
+      - name: Download DB from release (required)
+        id: restore
         run: |
-          gh release download update --pattern "*.db" --dir . 2>/dev/null \
-            && echo "DB restored from release" \
-            || echo "No cached DB found, starting fresh"
+          gh release download update --pattern "*.db" --dir .
+          test -s swiss_floorball_lupl.db
+          echo "DB restored from release"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # A reimport changes a lot at once — keep the DB as it was.
+      - name: Back up DB before reimport
+        if: ${{ inputs.since != '' && !inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-before-reimport
+          path: swiss_floorball_lupl.db
+          retention-days: 30
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,12 +64,38 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Fast daily refresh
-        run: python fetch_daily.py
+      - name: Daily refresh
+        run: |
+          args=(--max-minutes "${MAX_MINUTES:-150}")
+          if [ -n "$SINCE" ]; then args+=(--since "$SINCE"); fi
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          echo "python fetch_daily.py ${args[*]}"
+          python fetch_daily.py "${args[@]}"
         env:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SINCE: ${{ inputs.since }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          MAX_MINUTES: ${{ inputs.max_minutes }}
+
+      # Also after a failed or timed-out import: every game is committed on its
+      # own and the DB remembers which games are synced (synced_games), so the
+      # next run picks up exactly where this one stopped. Opening the DB rolls
+      # back a transaction that was cut off; a DB that is not "ok" is not uploaded.
+      - name: Check DB
+        id: check
+        if: ${{ always() && steps.restore.outcome == 'success' && !inputs.dry_run }}
+        run: |
+          python - <<'EOF'
+          import sqlite3, sys
+          c = sqlite3.connect("swiss_floorball_lupl.db")
+          ok = c.execute("PRAGMA integrity_check").fetchone()[0]
+          games = c.execute("SELECT COUNT(*), MAX(date) FROM games").fetchone()
+          print("integrity:", ok, "| games:", games[0], "| latest:", games[1])
+          sys.exit(0 if ok == "ok" and games[0] > 0 else 1)
+          EOF
 
       - name: Upload updated DB to release
+        if: ${{ always() && steps.check.outcome == 'success' }}
         run: |
           gh release delete update --yes 2>/dev/null || true
           gh release create update swiss_floorball_lupl.db \
