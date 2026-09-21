@@ -149,8 +149,12 @@ def plan_penalties(game, pen_rows, stats):
     for team_raw, player_id, team_id in pen_rows:
         side, how = penalty_side(game, team_raw, player_id)
         stats[f"penalties decided by {how}" if side else f"penalties {how} (untouched)"] += 1
+        if how == "conflict" and stats["penalties conflict (untouched)"] <= 8:
+            log.info(f"  {game['game_id']}: penalty conflict — feed says {team_raw!r}, player {player_id} "
+                     f"is in the other lineup ({game['home_name']} – {game['away_name']})")
         if side and team_id != want[side] and team_ids_ok(game):
             fixes[(team_raw, player_id)] = side
+            stats[f"penalty groups to fix (decided by {how})"] += 1
     return fixes
 
 
@@ -195,6 +199,15 @@ def report(label, games, goal_plan, pen_plan, stats, skipped):
         g, fx = games[gid], goal_plan[gid]
         log.info(f"    e.g. {gid}  {g['home_name']} – {g['away_name']}  {g['result']}: "
                  f"→ home {len(fx.get('home', []))}, → away {len(fx.get('away', []))}")
+    # Penalties to fix in a game whose goals are fine: expected only where the
+    # home team (the side the old importer couldn't match) has no goal to fix.
+    skipped_ids = {gid for gid, _ in skipped}
+    pen_only = [g for g in pen_plan if g not in goal_plan and g not in skipped_ids]
+    log.info(f"    penalty games without a goal fix: {len(pen_only)} of {len(pen_plan)}")
+    for gid in pen_only[:8]:
+        g = games[gid]
+        log.info(f"      {gid}  {g['home_name']} – {g['away_name']}  {g['result']}: "
+                 + ", ".join(f"{tr!r}→{side}" for (tr, _), side in list(pen_plan[gid].items())[:3]))
     if skipped:
         log.info(f"    skipped {len(skipped)} games:")
         for gid, why in skipped[:15]:
