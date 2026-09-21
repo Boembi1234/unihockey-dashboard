@@ -620,6 +620,70 @@ def parse_penalty(event_raw):
         return minutes, (m.group(3) or "").strip() or "Unbekannt"
     return None, None
 
+_GOAL_EVENTS = ("Torschütze", "Eigentor")
+_SCORE_RE    = re.compile(r"(\d+):(\d+)")
+
+
+def _goal_sides(rows):
+    """Which side scored each goal → {row index: "home" | "away" | None}.
+
+    Decided from the score change, never from the team name: the feed names the
+    CLUB ("Tigers Langnau") while the game has the TEAM ("Tigers Langnau II"),
+    and the old exact comparison credited every such goal to the away team.
+    Own goals carry neither team nor player, but they move the score, so they
+    are tracked too. None = the step isn't clear (both numbers moved, or none).
+    """
+    scored = []
+    for i, row in enumerate(rows):
+        cells = row.get("cells", [])
+        if len(cells) < 4:
+            continue
+        event = cell_text(cells[1])
+        m = _SCORE_RE.search(event)
+        if m and any(k in event for k in _GOAL_EVENTS):
+            scored.append((i, int(m.group(1)), int(m.group(2))))
+    # The feed is newest first; walk it in playing order either way.
+    if scored and sum(scored[0][1:]) > sum(scored[-1][1:]):
+        scored.reverse()
+
+    sides, prev_h, prev_a = {}, 0, 0
+    for i, h, a in scored:
+        if h > prev_h and a == prev_a:
+            sides[i] = "home"
+        elif a > prev_a and h == prev_h:
+            sides[i] = "away"
+        else:
+            sides[i] = None
+        prev_h, prev_a = h, a
+    return sides
+
+
+def _norm_team(name):
+    return " ".join((name or "").split()).casefold()
+
+
+def _penalty_side(lineup_map, player, feed_team, home_name, away_name):
+    """Which side took a penalty → "home" | "away" | None.
+
+    1. The player's side in the lineups. 2. Otherwise the feed's club name as a
+    prefix of exactly one team name ("Tigers Langnau" → "Tigers Langnau II").
+    Both match in a derby of two teams of the same club → None, don't guess.
+    """
+    if lineup_map and player:
+        in_home = (player, home_name) in lineup_map
+        in_away = (player, away_name) in lineup_map
+        if in_home != in_away:
+            return "home" if in_home else "away"
+    feed = _norm_team(feed_team)
+    if not feed:
+        return None
+    is_home = _norm_team(home_name).startswith(feed)
+    is_away = _norm_team(away_name).startswith(feed)
+    if is_home != is_away:
+        return "home" if is_home else "away"
+    return None
+
+
 def fetch_and_store_goals(conn, game_id, home_id, away_id,
                           home_name, away_name, game_date, weekday, season,
                           penalties_only=False, lineup_map=None):
@@ -627,75 +691,82 @@ def fetch_and_store_goals(conn, game_id, home_id, away_id,
     if not raw:
         return 0
 
+    rows  = [row for region in unwrap(raw).get("regions", []) for row in region.get("rows", [])]
+    sides = _goal_sides(rows)
+    teams = {"home": (home_id, home_name), "away": (away_id, away_name), None: (None, None)}
+    other = {"home": "away", "away": "home", None: None}
+
     stored_goals = stored_pen = 0
-    for region in unwrap(raw).get("regions", []):
-        for row in region.get("rows", []):
-            cells = row.get("cells", [])
-            if len(cells) < 4:
+    for i, row in enumerate(rows):
+        cells = row.get("cells", [])
+        if len(cells) < 4:
+            continue
+        minute_raw = cell_text(cells[0])
+        event_raw  = cell_text(cells[1])
+        team_raw   = cell_text(cells[2])
+        player_raw = cell_text(cells[3])
+
+        # ── Goals ────────────────────────────────────────────────
+        if not penalties_only and "Torschütze" in event_raw:
+            score_m       = re.search(r"(\d+:\d+)", event_raw)
+            score_at_goal = score_m.group(1) if score_m else None
+            scorer, assist = parse_scorer_assist(player_raw)
+            side = sides.get(i)
+            scored_id, scored_name    = teams[side]
+            conceded_id, conceded_raw = teams[other[side]]
+            scored_raw = team_raw.strip() or None   # as the feed gives it
+            if side is None:
+                log.warning(f"    {game_id}: goal {score_at_goal} at {minute_raw} — "
+                            f"score step not clear, team left empty")
+
+            # Resolve to player IDs via lineup map (keyed by the full team name)
+            scorer_name, scorer_pid = resolve_player(lineup_map, scorer, scored_name or scored_raw)
+            assist_name, assist_pid = resolve_player(lineup_map, assist, scored_name or scored_raw)
+
+            secs = minute_to_seconds(minute_raw)
+            conn.execute("""
+                INSERT INTO goals
+                  (game_id, team_scored_id, team_conceded_id,
+                   team_scored_raw, team_conceded_raw,
+                   scorer_raw, assist_raw,
+                   scorer_id, assist_id, scorer_name, assist_name,
+                   minute, minute_seconds,
+                   period, score_at_goal, date, weekday, season)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (game_id, scored_id, conceded_id, scored_raw, conceded_raw,
+                  scorer, assist,
+                  scorer_pid, assist_pid, scorer_name, assist_name,
+                  minute_raw, secs, seconds_to_period(secs),
+                  score_at_goal, game_date, weekday, season))
+            stored_goals += 1
+
+        # ── Penalties ────────────────────────────────────────────
+        elif "Strafe" in event_raw and "Strafenende" not in event_raw:
+            duration, reason = parse_penalty(event_raw)
+            if duration is None:
                 continue
-            minute_raw = cell_text(cells[0])
-            event_raw  = cell_text(cells[1])
-            team_raw   = cell_text(cells[2])
-            player_raw = cell_text(cells[3])
+            pen_team_raw = team_raw.strip()
+            pen_player = player_raw.strip() or None
+            pen_side = _penalty_side(lineup_map, pen_player, pen_team_raw, home_name, away_name)
+            pen_team_id, pen_team_name = teams[pen_side]
 
-            # ── Goals ────────────────────────────────────────────────
-            if not penalties_only and "Torschütze" in event_raw:
-                score_m       = re.search(r"(\d+:\d+)", event_raw)
-                score_at_goal = score_m.group(1) if score_m else None
-                scorer, assist = parse_scorer_assist(player_raw)
-                if team_raw.strip() == home_name.strip():
-                    scored_id, conceded_id = home_id, away_id
-                    scored_raw, conceded_raw = home_name, away_name
-                else:
-                    scored_id, conceded_id = away_id, home_id
-                    scored_raw, conceded_raw = away_name, home_name
+            # Resolve penalty player to ID (lineup map is keyed by the full team name)
+            pen_full_name, pen_pid = resolve_player(lineup_map, pen_player,
+                                                    pen_team_name or pen_team_raw)
 
-                # Resolve to player IDs via lineup map
-                scorer_name, scorer_pid = resolve_player(lineup_map, scorer, scored_raw)
-                assist_name, assist_pid = resolve_player(lineup_map, assist, scored_raw)
-
-                secs = minute_to_seconds(minute_raw)
-                conn.execute("""
-                    INSERT INTO goals
-                      (game_id, team_scored_id, team_conceded_id,
-                       team_scored_raw, team_conceded_raw,
-                       scorer_raw, assist_raw,
-                       scorer_id, assist_id, scorer_name, assist_name,
-                       minute, minute_seconds,
-                       period, score_at_goal, date, weekday, season)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """, (game_id, scored_id, conceded_id, scored_raw, conceded_raw,
-                      scorer, assist,
-                      scorer_pid, assist_pid, scorer_name, assist_name,
-                      minute_raw, secs, seconds_to_period(secs),
-                      score_at_goal, game_date, weekday, season))
-                stored_goals += 1
-
-            # ── Penalties ────────────────────────────────────────────
-            elif "Strafe" in event_raw and "Strafenende" not in event_raw:
-                duration, reason = parse_penalty(event_raw)
-                if duration is None:
-                    continue
-                pen_team_id = home_id if team_raw.strip() == home_name.strip() else away_id
-                pen_team_raw = team_raw.strip()
-                pen_player = player_raw.strip() or None
-
-                # Resolve penalty player to ID
-                pen_full_name, pen_pid = resolve_player(lineup_map, pen_player, pen_team_raw)
-
-                secs = minute_to_seconds(minute_raw)
-                conn.execute("""
-                    INSERT INTO penalties
-                      (game_id, team_id, team_raw, player_raw,
-                       player_id, player_name,
-                       minute, minute_seconds, period,
-                       duration_min, reason, date, weekday, season)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """, (game_id, pen_team_id, pen_team_raw, pen_player,
-                      pen_pid, pen_full_name,
-                      minute_raw, secs, seconds_to_period(secs),
-                      duration, reason, game_date, weekday, season))
-                stored_pen += 1
+            secs = minute_to_seconds(minute_raw)
+            conn.execute("""
+                INSERT INTO penalties
+                  (game_id, team_id, team_raw, player_raw,
+                   player_id, player_name,
+                   minute, minute_seconds, period,
+                   duration_min, reason, date, weekday, season)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (game_id, pen_team_id, pen_team_raw, pen_player,
+                  pen_pid, pen_full_name,
+                  minute_raw, secs, seconds_to_period(secs),
+                  duration, reason, game_date, weekday, season))
+            stored_pen += 1
 
     return stored_goals, stored_pen
 
