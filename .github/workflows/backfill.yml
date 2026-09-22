@@ -1,0 +1,109 @@
+name: Backfill missing games
+
+# Adds the games of past seasons that fb_games never got (rounds without a
+# league tab, cups, forfeits — see fetch_missing.py), with lineups, goals and
+# penalties for the leagues down to U14. Writes the SQLite DB like refresh.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: 'Season start years, comma-separated (2025 = season 2025/26)'
+        type: string
+        default: '2025'
+      dry_run:
+        description: 'Dry run: list what is missing, write nothing'
+        type: boolean
+        default: true
+      stats:
+        description: 'Also import lineups, goals and penalties (leagues down to U14)'
+        type: boolean
+        default: true
+      max_minutes:
+        description: 'Stop the stats import after this many minutes; run again for the rest'
+        type: string
+        default: '150'
+
+permissions:
+  contents: write
+
+# Shared with refresh.yml and the repair workflows: they download, modify and
+# re-upload the same DB, so they must never run at the same time.
+concurrency:
+  group: lupl-db
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Must NOT fall back to a fresh DB — a real run would upload an empty
+      # DB over the real one.
+      - name: Download DB from release (required)
+        id: restore
+        run: |
+          gh release download update --pattern "*.db" --dir .
+          test -s swiss_floorball_lupl.db
+          echo "DB restored from release"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Back up DB before backfill
+        if: ${{ !inputs.dry_run && inputs.stats }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-before-backfill
+          path: swiss_floorball_lupl.db
+          retention-days: 30
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Backfill
+        run: |
+          args=(--seasons "$SEASONS" --max-minutes "${MAX_MINUTES:-150}")
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ "$STATS" != "true" ]; then args+=(--no-stats); fi
+          echo "python fetch_missing.py ${args[*]}"
+          python fetch_missing.py "${args[@]}"
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SEASONS: ${{ inputs.seasons }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          STATS: ${{ inputs.stats }}
+          MAX_MINUTES: ${{ inputs.max_minutes }}
+
+      # Also after a failed or timed-out import: every game is committed on its
+      # own and synced_games records what reached Supabase, so the next run
+      # picks up where this one stopped. A DB that is not "ok" is not uploaded.
+      - name: Check DB
+        id: check
+        if: ${{ always() && steps.restore.outcome == 'success' && !inputs.dry_run && inputs.stats }}
+        run: |
+          python - <<'EOF'
+          import sqlite3, sys
+          c = sqlite3.connect("swiss_floorball_lupl.db")
+          ok = c.execute("PRAGMA integrity_check").fetchone()[0]
+          games = c.execute("SELECT COUNT(*), MAX(date) FROM games").fetchone()
+          print("integrity:", ok, "| games:", games[0], "| latest:", games[1])
+          sys.exit(0 if ok == "ok" and games[0] > 0 else 1)
+          EOF
+
+      - name: Upload updated DB to release
+        if: ${{ always() && steps.check.outcome == 'success' }}
+        run: |
+          gh release delete update --yes 2>/dev/null || true
+          gh release create update swiss_floorball_lupl.db \
+            --title "DB Cache" --notes "Auto-updated DB" --prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

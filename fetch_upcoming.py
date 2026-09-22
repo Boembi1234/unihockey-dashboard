@@ -12,8 +12,16 @@ Three-stage fetch:
      (Mobiliar Cup, Ligacup, Supercup-Spieltage) are not part of the league
      tabs, so this sweep is what surfaces them. Duplicates from 1a are
      skipped.
+ 1c. Team sweep: `mode=team&team_id=…&season=…` for every team that appears
+     in this season's fb_games rows. That list is complete — qualification,
+     playoffs, playouts, cup AND the promotion/relegation rounds, which have
+     no tab of their own and were never picked up by 1a (217 games of
+     2025/26 were missing). Any game of the season not yet in fb_games is
+     added, past ones with their final result.
  2.  /api/games/<id> on each ID fills in the real team IDs, location with
-     coordinates, accurate date/time and subtitle.
+     coordinates, accurate date/time and subtitle. A game found by the team
+     sweep has no league tab: league, group and phase come from the subtitle
+     (su_subtitle.parse_subtitle).
 
 Venues: new venues are inserted with `on_conflict=name` +
 `resolution=ignore-duplicates`. Requires the UNIQUE index on venues.name
@@ -26,6 +34,9 @@ Run daily via GitHub Actions or manually:
 
 import os, re, sys, json, time, logging, requests
 from datetime import date, timedelta, datetime
+
+from game_result import check_result, OK
+from su_subtitle import parse_subtitle
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -42,6 +53,7 @@ CURRENT_SEASON = 2026
 DAYS_AHEAD = 60
 MAX_ROUNDS_PER_COMBO = 40      # safety bound while walking the round slider
 MAX_CURRENT_PAGES = 90         # day-by-day sweep upper bound (> DAYS_AHEAD)
+TEAM_PAGE = 200                # games_per_page for mode=team: a whole season in one call
 
 # Normalise SU labels to the canonical names the app filters on.
 LEAGUE_MAP = {
@@ -172,21 +184,30 @@ def sb_upsert(table, rows):
         r.raise_for_status()
 
 
-def sb_finished_game_ids(from_date):
-    """game_ids dated `from_date` or later that already have a result."""
-    ids, offset, page = set(), 0, 1000
+def sb_rows(query, select):
+    """All fb_games rows matching `query`, page by page."""
+    rows, offset, page = [], 0, 1000
     while True:
-        url = (f"{SUPABASE_URL}/rest/v1/fb_games?select=game_id&date=gte.{from_date}"
-               f"&result=not.is.null&order=game_id&limit={page}&offset={offset}")
-        r = SESSION.get(url, headers=sb_headers(), timeout=60)
+        url = (f"{SUPABASE_URL}/rest/v1/fb_games?select={select}&{query}"
+               f"&order=game_id&limit={page}&offset={offset}")
+        r = SESSION.get(url, headers=sb_headers(), timeout=120)
         if r.status_code != 200:
             log.error(f"  Supabase fb_games read failed [{r.status_code}]: {r.text[:300]}")
             r.raise_for_status()
-        rows = r.json()
-        ids.update(str(row["game_id"]) for row in rows)
-        if len(rows) < page:
-            return ids
+        chunk = r.json()
+        rows.extend(chunk)
+        if len(chunk) < page:
+            return rows
         offset += page
+
+
+def sb_season_games(season):
+    """fb_games rows of a season → (game_ids, team_ids, finished game_ids)."""
+    rows = sb_rows(f"season=eq.{season}", "game_id,home_team_id,away_team_id,result")
+    ids = {str(r["game_id"]) for r in rows}
+    teams = {r[k] for r in rows for k in ("home_team_id", "away_team_id") if r.get(k)}
+    finished = {str(r["game_id"]) for r in rows if r.get("result")}
+    return ids, teams, finished
 
 
 def sb_insert_ignore(table, rows, conflict_col):
@@ -245,9 +266,13 @@ def discover_combos(season):
 
 def row_game_id_and_date(row):
     """A mode=list row has no top-level id — the game id lives in the cells'
-    game_detail links; the first cell text is 'DD.MM.YYYY HH:MM'."""
+    game_detail links (a mode=team row carries that link on the row itself);
+    the first cell text is 'DD.MM.YYYY HH:MM'."""
     gid = None
     game_date = None
+    row_link = row.get("link") or {}
+    if row_link.get("page") == "game_detail" and row_link.get("ids"):
+        gid = str(row_link["ids"][0])
     for cell in row.get("cells") or []:
         link = cell.get("link") or {}
         if link.get("page") == "game_detail" and link.get("ids"):
@@ -388,14 +413,62 @@ def sweep_current(season, seen_ids, days=DAYS_AHEAD):
     return ids
 
 
+# ── Stage 1c: team sweep (mode=team) ─────────────────────────────────────────
+
+def team_games(team_id, season):
+    """One team's whole season → [(game_id, iso_date)]. Cancelled games carry
+    "Abgesagt" instead of a date and are left out."""
+    data = api_data("games", {"mode": "team", "team_id": team_id,
+                              "season": season, "games_per_page": TEAM_PAGE})
+    out = []
+    for region in (data or {}).get("regions") or []:
+        for row in region.get("rows") or []:
+            gid, gdate = row_game_id_and_date(row)
+            if gid and gdate:
+                out.append((gid, gdate))
+    return out
+
+
+def sweep_teams(season, team_ids, known_ids, seen_ids, since=None, until=None):
+    """mode=team for every team → [(game_id, None)] for games of the season that
+    are neither in fb_games (`known_ids`) nor found by the sweeps before
+    (`seen_ids`). `since`/`until` narrow the dates; None = the whole season.
+    One API call per team."""
+    found = []
+    failed = 0
+    for i, tid in enumerate(sorted(team_ids), 1):
+        games = team_games(tid, season)
+        if not games:
+            failed += 1
+        for gid, gdate in games:
+            if gid in known_ids or gid in seen_ids:
+                continue
+            if (since and gdate < since) or (until and gdate > until):
+                continue
+            seen_ids.add(gid)
+            found.append((gid, None))
+        if i % 250 == 0:
+            log.info(f"  {i}/{len(team_ids)} teams swept, {len(found)} games not in fb_games so far")
+        time.sleep(SLEEP)
+    if failed:
+        log.warning(f"  {failed} teams returned no games at all (API error or empty season)")
+    return found
+
+
 # ── Stage 2: per-game detail → fb_games row ──────────────────────────────────
 
-def fetch_game_detail(game_id, league_label, season):
+def fetch_game_detail(game_id, league_label, season, today=None):
     """Hit /games/<id> and build a row matching the fb_games schema.
 
     The detail endpoint declares cell order via `headers[*].key`, so we index
     by key instead of position — safe against future column reshuffles. Also
-    pulls x/y from the location cell's map link for venue upsert."""
+    pulls x/y from the location cell's map link for venue upsert.
+
+    `league_label` is the league tab the game was found under. None means the
+    game came from the team sweep: league, group and phase are then read from
+    the subtitle. A game dated before `today` is over, so its result goes into
+    the row (never for today's or later games — that would be a live score);
+    `season` None means "from the date"."""
     data = api_data(f"games/{game_id}")
     if not data:
         return None
@@ -423,9 +496,17 @@ def fetch_game_detail(game_id, league_label, season):
         return None
 
     time_raw = cell_text(by_key.get("time")) or None
-    # No `result`: while a game runs the API's result is the LIVE score, and
-    # the app scores Tipps against fb_games.result exactly once. Results are
-    # written by fetch_results.py, after the final whistle only.
+    # No `result` for a game of today or later: while a game runs the API's
+    # result is the LIVE score, and the app scores Tipps against fb_games.result
+    # exactly once. Results are written by fetch_results.py, after the final
+    # whistle only. A game of an earlier day is over — its result is final.
+    result = None
+    if today and iso_date < today:
+        res_cell = by_key.get("result")
+        texts = res_cell.get("text") if isinstance(res_cell, dict) else None
+        result, status, _ = check_result(texts if isinstance(texts, list) else [texts or ""])
+        if status != OK:
+            result = None
 
     loc_cell = by_key.get("location") or {}
     location = cell_text(loc_cell) or None
@@ -439,9 +520,19 @@ def fetch_game_detail(game_id, league_label, season):
         loc_lat = loc_link.get("y")
 
     subtitle = (data.get("subtitle") or "").strip() or None
-    phase = phase_from_label(subtitle or league_label)
+    if league_label:
+        league, league_group, phase = league_label, league_label, phase_from_label(subtitle or league_label)
+    else:
+        parsed = parse_subtitle(subtitle)
+        league, league_group, phase = parsed["league"], parsed["group"], parsed["phase"]
+        if not league:
+            log.warning(f"  game {game_id}: unknown competition {subtitle!r}, skipping")
+            return None
+    if season is None:
+        d = date.fromisoformat(iso_date)
+        season = d.year if d.month >= 7 else d.year - 1
 
-    return {
+    row = {
         "game_id":       game_id,
         "home_team_id":  int(home_ids[0]) if home_ids else None,
         "away_team_id":  int(away_ids[0]) if away_ids else None,
@@ -453,14 +544,17 @@ def fetch_game_detail(game_id, league_label, season):
         "season":        season,
         "location":      location,
         "location_city": location_city,
-        "league_group":  league_label or None,
+        "league_group":  league_group or None,
         "subtitle":      subtitle,
         "phase":         phase,
-        "league":        league_label,
+        "league":        league,
         # Private — stripped by split_venues() before the fb_games upsert.
         "_loc_lat":      loc_lat,
         "_loc_lng":      loc_lng,
     }
+    if result:
+        row["result"] = result
+    return row
 
 
 # ── Venues ────────────────────────────────────────────────────────────────────
@@ -491,10 +585,12 @@ def split_venues(games):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main():
+def main(dry_run=False):
     if not SUPABASE_SERVICE_KEY:
         log.error("SUPABASE_SERVICE_KEY not set — aborting.")
         sys.exit(1)
+    if dry_run:
+        log.info("DRY RUN — nothing will be written")
 
     log.info(f"Stage 1a: league sweep for season {CURRENT_SEASON}, next {DAYS_AHEAD} days…")
     id_pairs, seen_ids = sweep_leagues(CURRENT_SEASON)
@@ -505,15 +601,26 @@ def main():
     log.info(f"  {len(cup_pairs)} additional games from current sweep")
     id_pairs.extend(cup_pairs)
 
+    # Same window as the league sweep, plus anything of the season already
+    # played: the team list runs to the end of the season, and fixtures beyond
+    # DAYS_AHEAD are deliberately not kept in fb_games.
+    cutoff = (date.today() + timedelta(days=DAYS_AHEAD)).isoformat()
+    known_ids, team_ids, finished = sb_season_games(CURRENT_SEASON)
+    log.info(f"Stage 1c: team sweep — {len(team_ids)} teams of season {CURRENT_SEASON} in fb_games…")
+    team_pairs = sweep_teams(CURRENT_SEASON, team_ids, known_ids, seen_ids, until=cutoff)
+    log.info(f"  {len(team_pairs)} games up to {cutoff} not in fb_games (rounds the league sweep missed)")
+    id_pairs.extend(team_pairs)
+
     if not id_pairs:
         log.info("Nothing to fetch.")
         return
 
+    today = date.today().isoformat()
     log.info(f"Stage 2: fetching details for {len(id_pairs)} games…")
     games = []
     skipped = 0
     for i, (gid, league_label) in enumerate(id_pairs, 1):
-        row = fetch_game_detail(gid, league_label, CURRENT_SEASON)
+        row = fetch_game_detail(gid, league_label, CURRENT_SEASON, today=today)
         if row:
             games.append(row)
         else:
@@ -531,13 +638,22 @@ def main():
 
     # A game that has its result is closed — a run later on a game day must not
     # rewrite the row (fetch_daily.py fills league / phase / lineups differently).
-    finished = sb_finished_game_ids(date.today().isoformat())
     closed = [g for g in games if str(g["game_id"]) in finished]
     if closed:
         games = [g for g in games if str(g["game_id"]) not in finished]
         log.info(f"  {len(closed)} games already have a result — left untouched")
 
     log.info(f"\nTotal: {len(games)} games to upsert ({skipped} skipped)")
+    team_found = {gid for gid, _ in team_pairs}
+    from_teams = [g for g in games if str(g["game_id"]) in team_found]
+    if from_teams:
+        log.info(f"  {len(from_teams)} of them found by the team sweep only:")
+        for g in sorted(from_teams, key=lambda g: (g["date"], g["game_id"]))[:60]:
+            log.info(f"    {g['game_id']} {g['date']} {g['league']:28} {g['phase']:13} "
+                     f"{g['home_team_raw']} – {g['away_team_raw']}"
+                     + (f"  {g['result']}" if g.get("result") else ""))
+    if dry_run:
+        return
 
     if games:
         venues = split_venues(games)
@@ -545,9 +661,17 @@ def main():
             sb_insert_ignore("venues", venues, conflict_col="name")
             log.info(f"  {len(venues)} venues sent (existing kept untouched)")
 
-        sb_upsert("fb_games", games)
-        log.info(f"Upserted {len(games)} games to Supabase fb_games")
+        # Rows with a result (past games from the team sweep) go separately: an
+        # upsert batch must have one set of keys, and the other rows must not
+        # carry `result` at all — NULL would wipe what fetch_results.py wrote.
+        with_result = [g for g in games if "result" in g]
+        without = [g for g in games if "result" not in g]
+        for chunk in (without, with_result):
+            for i in range(0, len(chunk), 500):
+                sb_upsert("fb_games", chunk[i:i + 500])
+        log.info(f"Upserted {len(games)} games to Supabase fb_games "
+                 f"({len(with_result)} past games with their result)")
 
 
 if __name__ == "__main__":
-    main()
+    main(dry_run="--dry-run" in sys.argv[1:])

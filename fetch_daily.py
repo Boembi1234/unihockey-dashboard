@@ -30,6 +30,7 @@ from fetch_lupl import (
     _sb_upsert, _batched, FANTASY_LEAGUES,
 )
 from game_result import check_result, REVIEW, NONE
+from su_subtitle import parse_subtitle
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
@@ -242,30 +243,13 @@ def fetch_game_row(game_id):
     home_id = home_ids[0] if home_ids else 0
     away_id = away_ids[0] if away_ids else 0
 
-    # Parse phase and league_group from subtitle
+    # League, group and phase from the subtitle — the same parser as
+    # fetch_upcoming.py / fetch_missing.py, so a row keeps its phase when the
+    # stats sync writes it again (e.g. "Auf-/Abstieg", "Playout").
     subtitle = data.get("subtitle", "")
-    sub_lower = subtitle.lower()
-
-    # Detect phase
-    phase = "Qualifikation"
-    if "playoff" in sub_lower or "abstieg" in sub_lower or "superfinal" in sub_lower or "final" in sub_lower:
-        if "halbfinal" in sub_lower:
-            phase = "Halbfinal"
-        elif "viertelfinal" in sub_lower:
-            phase = "Viertelfinal"
-        elif "superfinal" in sub_lower:
-            phase = "Superfinal"
-        elif "final" in sub_lower and "halbfinal" not in sub_lower and "viertelfinal" not in sub_lower:
-            phase = "Final"
-        else:
-            phase = "Playoff"
-
-    # Detect league_group from subtitle (e.g. "Gruppe 1" or "Gruppe 2")
-    import re as _re
-    league_group = None
-    grp_match = _re.search(r'Gruppe\s+\d+', subtitle)
-    if grp_match:
-        league_group = grp_match.group(0)
+    parsed = parse_subtitle(subtitle)
+    phase = parsed["phase"]
+    league_group = parsed["group"]
 
     return {
         "home_id": home_id,
