@@ -45,7 +45,7 @@ def find_missing(seasons, known_ids):
     seen = set()
     found, all_teams = [], set()
     for season in seasons:
-        _, teams, _ = sb_season_games(season)
+        _, teams, _ = sb_season_games(season)   # rows, teams, finished
         all_teams |= teams
         log.info(f"Season {season}: {len(teams)} teams in fb_games — sweeping their game lists…")
         pairs = sweep_teams(season, teams, known_ids, seen, until=cutoff)

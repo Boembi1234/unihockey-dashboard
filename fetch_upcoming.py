@@ -22,6 +22,10 @@ Three-stage fetch:
      coordinates, accurate date/time and subtitle. A game found by the team
      sweep has no league tab: league, group and phase come from the subtitle
      (su_subtitle.parse_subtitle).
+     Only for games that are new or whose date, time or venue in the list
+     differs from fb_games — the 5-6000 games of the window are otherwise
+     unchanged, and fetching every detail took 45 of the run's 65 minutes.
+     `--full` fetches them all (the workflow does that once a week).
 
 Venues: new venues are inserted with `on_conflict=name` +
 `resolution=ignore-duplicates`. Requires the UNIQUE index on venues.name
@@ -202,12 +206,27 @@ def sb_rows(query, select):
 
 
 def sb_season_games(season):
-    """fb_games rows of a season → (game_ids, team_ids, finished game_ids)."""
-    rows = sb_rows(f"season=eq.{season}", "game_id,home_team_id,away_team_id,result")
-    ids = {str(r["game_id"]) for r in rows}
+    """fb_games rows of a season → ({game_id: row}, team_ids, finished game_ids)."""
+    rows = sb_rows(f"season=eq.{season}",
+                   "game_id,home_team_id,away_team_id,result,date,time,location")
+    by_id = {str(r["game_id"]): r for r in rows}
     teams = {r[k] for r in rows for k in ("home_team_id", "away_team_id") if r.get(k)}
-    finished = {str(r["game_id"]) for r in rows if r.get("result")}
-    return ids, teams, finished
+    finished = {gid for gid, r in by_id.items() if r.get("result")}
+    return by_id, teams, finished
+
+
+def unchanged(listed, stored):
+    """True when the list shows the game as fb_games has it — same date, time
+    and venue — so the detail page has nothing new. Unknown = changed."""
+    if not listed or not stored:
+        return False
+    if listed.get("date") != stored.get("date"):
+        return False
+    if (listed.get("time") or "")[:5] != (stored.get("time") or "")[:5]:
+        return False
+    if listed.get("location") and listed["location"] != (stored.get("location") or ""):
+        return False
+    return True
 
 
 def sb_insert_ignore(table, rows, conflict_col):
@@ -264,29 +283,44 @@ def discover_combos(season):
     return [c for c in combos if "test" not in c["label"].lower()]
 
 
-def row_game_id_and_date(row):
-    """A mode=list row has no top-level id — the game id lives in the cells'
-    game_detail links (a mode=team row carries that link on the row itself);
-    the first cell text is 'DD.MM.YYYY HH:MM'."""
-    gid = None
-    game_date = None
+def row_fields(row):
+    """A mode=list / mode=team row → {gid, date, time, location}.
+
+    The game id lives in the cells' game_detail links (a mode=team row carries
+    that link on the row itself). The first cell is 'DD.MM.YYYY HH:MM' (or two
+    texts), the cell after it the venue — both as the detail page has them."""
+    gid = game_date = game_time = location = None
     row_link = row.get("link") or {}
     if row_link.get("page") == "game_detail" and row_link.get("ids"):
         gid = str(row_link["ids"][0])
-    for cell in row.get("cells") or []:
+    cells = row.get("cells") or []
+    for i, cell in enumerate(cells):
         link = cell.get("link") or {}
         if link.get("page") == "game_detail" and link.get("ids"):
             gid = str(link["ids"][0])
-        txt = cell_text(cell)
+        texts = cell.get("text") if isinstance(cell, dict) else None
+        txt = " ".join(t for t in texts if t) if isinstance(texts, list) else (texts or "")
         if game_date is None and re.match(r"^\d{2}\.\d{2}\.\d{4}", txt or ""):
             game_date, _ = parse_iso_date(txt)
-    return gid, game_date
+            m = re.search(r"\b(\d{1,2}:\d{2})\b", txt)
+            game_time = m.group(1) if m else None
+            if i + 1 < len(cells):
+                nxt = cells[i + 1].get("text") if isinstance(cells[i + 1], dict) else None
+                if isinstance(nxt, list):
+                    location = " ".join(t for t in nxt if t).strip() or None
+    return {"gid": gid, "date": game_date, "time": game_time, "location": location}
 
 
-def sweep_league_combo(season, combo, group, today, cutoff, seen_ids):
+def row_game_id_and_date(row):
+    f = row_fields(row)
+    return f["gid"], f["date"]
+
+
+def sweep_league_combo(season, combo, group, today, cutoff, seen_ids, listed=None):
     """Walk one combo's round slider; return [(game_id, league_label)] within
     the date window. Rounds are chronological, so we stop as soon as a round
-    lies entirely beyond the cutoff."""
+    lies entirely beyond the cutoff. `listed` collects each game's date, time
+    and venue as the list shows them (stage 2 skips unchanged games)."""
     found = []
     params = {"mode": "list", "season": season,
               "league": combo["league"], "game_class": combo["game_class"]}
@@ -309,13 +343,16 @@ def sweep_league_combo(season, combo, group, today, cutoff, seen_ids):
 
         dates_on_page = []
         for row in rows:
-            gid, gdate = row_game_id_and_date(row)
+            f = row_fields(row)
+            gid, gdate = f["gid"], f["date"]
             if not gdate:
                 continue
             dates_on_page.append(gdate)
             if gid and gid not in seen_ids and today <= gdate <= cutoff:
                 seen_ids.add(gid)
                 found.append((gid, combo["label"]))
+                if listed is not None:
+                    listed[gid] = f
 
         # Entire round beyond the window → later rounds are too.
         if dates_on_page and min(dates_on_page) > cutoff:
@@ -332,7 +369,7 @@ def sweep_league_combo(season, combo, group, today, cutoff, seen_ids):
     return found
 
 
-def sweep_leagues(season, days=DAYS_AHEAD):
+def sweep_leagues(season, days=DAYS_AHEAD, listed=None):
     today  = date.today().isoformat()
     cutoff = (date.today() + timedelta(days=days)).isoformat()
 
@@ -346,7 +383,7 @@ def sweep_leagues(season, days=DAYS_AHEAD):
         combo_found = []
         for group in combo["groups"]:
             combo_found.extend(
-                sweep_league_combo(season, combo, group, today, cutoff, seen_ids))
+                sweep_league_combo(season, combo, group, today, cutoff, seen_ids, listed))
             time.sleep(SLEEP)
         if combo_found:
             log.info(f"  {len(combo_found):>4}  {combo['label']}")
@@ -416,20 +453,20 @@ def sweep_current(season, seen_ids, days=DAYS_AHEAD):
 # ── Stage 1c: team sweep (mode=team) ─────────────────────────────────────────
 
 def team_games(team_id, season):
-    """One team's whole season → [(game_id, iso_date)]. Cancelled games carry
-    "Abgesagt" instead of a date and are left out."""
+    """One team's whole season → [row_fields…] with gid and date. Cancelled
+    games carry "Abgesagt" instead of a date and are left out."""
     data = api_data("games", {"mode": "team", "team_id": team_id,
                               "season": season, "games_per_page": TEAM_PAGE})
     out = []
     for region in (data or {}).get("regions") or []:
         for row in region.get("rows") or []:
-            gid, gdate = row_game_id_and_date(row)
-            if gid and gdate:
-                out.append((gid, gdate))
+            f = row_fields(row)
+            if f["gid"] and f["date"]:
+                out.append(f)
     return out
 
 
-def sweep_teams(season, team_ids, known_ids, seen_ids, since=None, until=None):
+def sweep_teams(season, team_ids, known_ids, seen_ids, since=None, until=None, listed=None):
     """mode=team for every team → [(game_id, None)] for games of the season that
     are neither in fb_games (`known_ids`) nor found by the sweeps before
     (`seen_ids`). `since`/`until` narrow the dates; None = the whole season.
@@ -440,13 +477,16 @@ def sweep_teams(season, team_ids, known_ids, seen_ids, since=None, until=None):
         games = team_games(tid, season)
         if not games:
             failed += 1
-        for gid, gdate in games:
+        for f in games:
+            gid, gdate = f["gid"], f["date"]
             if gid in known_ids or gid in seen_ids:
                 continue
             if (since and gdate < since) or (until and gdate > until):
                 continue
             seen_ids.add(gid)
             found.append((gid, None))
+            if listed is not None:
+                listed[gid] = f
         if i % 250 == 0:
             log.info(f"  {i}/{len(team_ids)} teams swept, {len(found)} games not in fb_games so far")
         time.sleep(SLEEP)
@@ -585,15 +625,18 @@ def split_venues(games):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main(dry_run=False):
+def main(dry_run=False, full=False):
     if not SUPABASE_SERVICE_KEY:
         log.error("SUPABASE_SERVICE_KEY not set — aborting.")
         sys.exit(1)
     if dry_run:
         log.info("DRY RUN — nothing will be written")
+    if full:
+        log.info("FULL — details of every game in the window are fetched")
 
+    listed = {}     # game_id → date/time/venue as the lists show them
     log.info(f"Stage 1a: league sweep for season {CURRENT_SEASON}, next {DAYS_AHEAD} days…")
-    id_pairs, seen_ids = sweep_leagues(CURRENT_SEASON)
+    id_pairs, seen_ids = sweep_leagues(CURRENT_SEASON, listed=listed)
     log.info(f"  {len(id_pairs)} games from leagues")
 
     log.info("Stage 1b: mode=current sweep (cup competitions)…")
@@ -605,15 +648,27 @@ def main(dry_run=False):
     # played: the team list runs to the end of the season, and fixtures beyond
     # DAYS_AHEAD are deliberately not kept in fb_games.
     cutoff = (date.today() + timedelta(days=DAYS_AHEAD)).isoformat()
-    known_ids, team_ids, finished = sb_season_games(CURRENT_SEASON)
+    stored, team_ids, finished = sb_season_games(CURRENT_SEASON)
     log.info(f"Stage 1c: team sweep — {len(team_ids)} teams of season {CURRENT_SEASON} in fb_games…")
-    team_pairs = sweep_teams(CURRENT_SEASON, team_ids, known_ids, seen_ids, until=cutoff)
+    team_pairs = sweep_teams(CURRENT_SEASON, team_ids, set(stored), seen_ids, until=cutoff, listed=listed)
     log.info(f"  {len(team_pairs)} games up to {cutoff} not in fb_games (rounds the league sweep missed)")
     id_pairs.extend(team_pairs)
 
     if not id_pairs:
         log.info("Nothing to fetch.")
         return
+
+    # Stage 2 only for what can have changed: games not in fb_games, games the
+    # lists show on another date/time/venue, games already finished (their
+    # rows are left alone anyway) are skipped. A weekly --full run refetches
+    # everything as a safety net.
+    if not full:
+        before = len(id_pairs)
+        id_pairs = [(gid, label) for gid, label in id_pairs
+                    if gid not in stored or not unchanged(listed.get(gid), stored[gid])]
+        new = sum(1 for gid, _ in id_pairs if gid not in stored)
+        log.info(f"  {before - len(id_pairs)} games unchanged since the last run — skipped; "
+                 f"{new} new, {len(id_pairs) - new} with another date, time or venue")
 
     today = date.today().isoformat()
     log.info(f"Stage 2: fetching details for {len(id_pairs)} games…")
@@ -674,4 +729,10 @@ def main(dry_run=False):
 
 
 if __name__ == "__main__":
-    main(dry_run="--dry-run" in sys.argv[1:])
+    import argparse
+    ap = argparse.ArgumentParser(description="Fixtures of the next 60 days → fb_games")
+    ap.add_argument("--dry-run", action="store_true", help="sweep and report, write nothing")
+    ap.add_argument("--full", action="store_true",
+                    help="fetch the detail of every game in the window, not only new/changed ones")
+    args = ap.parse_args()
+    main(dry_run=args.dry_run, full=args.full)

@@ -1,5 +1,8 @@
 name: Fetch upcoming games
 
+# Daily: new games and games whose date, time or venue changed (~35 min).
+# Mondays: the detail of every game in the window is refetched (~80 min).
+
 on:
   schedule:
     - cron: '0 5 * * *'   # every day at 05:00 UTC
@@ -7,6 +10,10 @@ on:
     inputs:
       dry_run:
         description: 'Dry run: sweep and report only, write nothing'
+        type: boolean
+        default: false
+      full:
+        description: 'Refetch the detail of every game in the window (otherwise only new/changed)'
         type: boolean
         default: false
 
@@ -28,7 +35,12 @@ jobs:
 
       - name: Fetch upcoming games and push to Supabase
         run: |
-          if [ "$DRY_RUN" = "true" ]; then python fetch_upcoming.py --dry-run; else python fetch_upcoming.py; fi
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ "$FULL" = "true" ] || [ "$(date -u +%u)" = "1" ]; then args+=(--full); fi
+          echo "python fetch_upcoming.py ${args[*]}"
+          python fetch_upcoming.py "${args[@]}"
         env:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           DRY_RUN: ${{ inputs.dry_run }}
+          FULL: ${{ inputs.full }}
