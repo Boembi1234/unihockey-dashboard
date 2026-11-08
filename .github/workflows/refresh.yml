@@ -78,6 +78,8 @@ jobs:
           python fetch_daily.py "${args[@]}"
         env:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SU_API_KEY: ${{ secrets.SU_API_KEY }}
+          SU_API_SECRET: ${{ secrets.SU_API_SECRET }}
           SINCE: ${{ inputs.since }}
           UNTIL: ${{ inputs.until }}
           DRY_RUN: ${{ inputs.dry_run }}

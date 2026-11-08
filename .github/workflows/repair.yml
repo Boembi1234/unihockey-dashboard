@@ -84,6 +84,8 @@ jobs:
           python repair_games.py "${args[@]}"
         env:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SU_API_KEY: ${{ secrets.SU_API_KEY }}
+          SU_API_SECRET: ${{ secrets.SU_API_SECRET }}
           DRY_RUN: ${{ inputs.dry_run }}
           FIX_GAMES_PLAYED: ${{ inputs.fix_games_played }}
           GAME_IDS: ${{ inputs.game_ids }}
