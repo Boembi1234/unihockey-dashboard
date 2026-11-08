@@ -222,7 +222,8 @@ def fetch_game_row(game_id):
         if not isinstance(c, dict):
             return str(c) if c else None, []
         text = c.get("text", [None])[0] if c.get("text") else None
-        ids = c.get("link", {}).get("ids", [])
+        # The legacy API links a team it doesn't know ("???") with ids [null].
+        ids = [i for i in (c.get("link") or {}).get("ids") or [] if i is not None]
         return text, ids
 
     home_name, home_ids = cell_val("home_name")

@@ -116,7 +116,8 @@ def cell_text(cell, index=0):
 
 def cell_link_ids(cell):
     link = (cell or {}).get("link") or {}
-    return link.get("ids") or []
+    # The legacy API links a team it doesn't know ("???") with ids [null].
+    return [i for i in link.get("ids") or [] if i is not None]
 
 
 def parse_iso_date(s):
