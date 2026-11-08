@@ -10,22 +10,24 @@ player_id shows up in home_lineup or away_lineup of any fb_games row with
 season = '2025').
 
 Usage:
-  SUPABASE_SERVICE_KEY=<key> python fetch_player_meta.py
+  SUPABASE_SERVICE_KEY=<key> SU_API_KEY=<key> SU_API_SECRET=<secret> python fetch_player_meta.py
 """
 
 import os, json, time, logging, requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import su_api
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
 
-BASE_URL             = "https://api-v2.swissunihockey.ch/api"
 SUPABASE_URL         = "https://ibqwotgrzgrwvejtphnh.supabase.co"
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 TARGET_SEASON        = "2025"
 UPSERT_BATCH         = 200
 WORKERS              = 8   # parallel API requests
 REQUEST_TIMEOUT      = 15
+POSITION_FIX         = {"VerinteidigerinIn": "Verteidigerin", "StürmerinIn": "Stürmerin"}
 
 SESSION = requests.Session()
 
@@ -100,6 +102,11 @@ def parse_player_response(pid, data):
     club         = txt(cells[1]) if len(cells) > 1 else None
     number       = txt(cells[2]) if len(cells) > 2 else None
     position     = txt(cells[3]) if len(cells) > 3 else None
+    # The legacy API writes "0" where api-v2 had "-", and mangles the female
+    # positions ("VerinteidigerinIn", "StürmerinIn").
+    if number == "0":
+        number = None
+    position = POSITION_FIX.get(position, position)
     yob_raw      = txt(cells[4]) if len(cells) > 4 else None
     height       = txt(cells[5]) if len(cells) > 5 else None
     weight       = txt(cells[6]) if len(cells) > 6 else None
@@ -131,13 +138,14 @@ def parse_player_response(pid, data):
 
 
 def fetch_one(pid):
-    url = f"{BASE_URL}/players/{pid}"
     try:
-        r = SESSION.get(url, timeout=REQUEST_TIMEOUT)
+        r = su_api.get(f"players/{pid}", timeout=REQUEST_TIMEOUT)
         if r.status_code == 404:
             return None
         r.raise_for_status()
         return parse_player_response(pid, r.json())
+    except su_api.SuAuthError:
+        raise
     except Exception as e:
         log.warning(f"  player {pid} failed: {e}")
         return None

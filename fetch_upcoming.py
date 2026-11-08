@@ -33,7 +33,7 @@ Venues: new venues are inserted with `on_conflict=name` +
 checks only the auto-generated PK and inserts duplicates on every run.
 
 Run daily via GitHub Actions or manually:
-    SUPABASE_SERVICE_KEY=... python fetch_upcoming.py
+    SUPABASE_SERVICE_KEY=... SU_API_KEY=... SU_API_SECRET=... python fetch_upcoming.py
 """
 
 import os, re, sys, json, time, logging, requests
@@ -41,6 +41,7 @@ from datetime import date, timedelta, datetime
 
 from game_result import check_result, OK
 from su_subtitle import parse_subtitle
+from su_api import api_get
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -49,7 +50,6 @@ log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-BASE_URL = "https://api-v2.swissunihockey.ch/api"
 SUPABASE_URL = "https://ibqwotgrzgrwvejtphnh.supabase.co"
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 SLEEP = 0.25
@@ -94,19 +94,6 @@ def combo_league_label(tab_label):
 
 SESSION = requests.Session()
 SESSION.headers["Accept"] = "application/json"
-
-
-def api_get(endpoint, params=None):
-    url = f"{BASE_URL}/{endpoint}"
-    for attempt in range(3):
-        try:
-            r = SESSION.get(url, params=params, timeout=15)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            log.warning(f"  Attempt {attempt+1}/3 failed: {e}")
-            time.sleep(1.5)
-    return None
 
 
 def api_data(endpoint, params=None):
@@ -164,6 +151,9 @@ def phase_from_label(label):
 
 
 def norm_league(name):
+    # mode=current on the legacy API labels its regions "Junioren U21A";
+    # fb_games has "Junioren U21 A", as api-v2 and the league tabs write it.
+    name = re.sub(r"\bU(\d{2})([A-D])\b", r"U\1 \2", name) if name else name
     return LEAGUE_MAP.get(name, name) if name else name
 
 

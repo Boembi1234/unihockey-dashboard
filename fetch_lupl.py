@@ -4,11 +4,12 @@ fetch_lupl.py
 Fetches all L-UPL games + goals from the Swiss Unihockey API.
 
 Correct API parameters (from the leagues dropdown):
-  https://api-v2.swissunihockey.ch/api/games?mode=list&league=24&game_class=11&season=2025
+  https://office.swissunihockey.ch/api/legacy/games?mode=list&league=24&game_class=11&season=2025
+  (plus auth_token — see su_api.py)
 
 Usage:
   pip install requests
-  python fetch_lupl.py
+  SU_API_KEY=... SU_API_SECRET=... python fetch_lupl.py
 
 Edit TARGET_LEAGUES and SEASONS in the CONFIG section to fetch other leagues.
 All available leagues are listed at the bottom of this file.
@@ -18,6 +19,8 @@ import sqlite3, requests, re, time, json, os, logging
 from datetime import datetime
 from collections import defaultdict
 
+from su_api import api_get
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
 
@@ -25,7 +28,6 @@ log = logging.getLogger(__name__)
 # CONFIGURATION  ← edit these
 # ══════════════════════════════════════════════════════════════════════
 
-BASE_URL  = "https://api-v2.swissunihockey.ch/api"
 DB_PATH   = "swiss_floorball_lupl.db"
 JSON_PATH = "data.json"
 
@@ -218,18 +220,6 @@ CREATE TABLE IF NOT EXISTS player_statistics_cache (
 
 SESSION = requests.Session()
 SESSION.headers["Accept"] = "application/json"
-
-def api_get(endpoint, params=None, retries=3):
-    url = f"{BASE_URL}/{endpoint}"
-    for attempt in range(retries):
-        try:
-            r = SESSION.get(url, params=params, timeout=15)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            log.warning(f"  Attempt {attempt+1}/{retries} failed: {e}")
-            time.sleep(1.5)
-    return None
 
 def unwrap(resp):
     if isinstance(resp, dict) and "data" in resp:
@@ -696,6 +686,17 @@ def fetch_and_store_goals(conn, game_id, home_id, away_id,
     teams = {"home": (home_id, home_name), "away": (away_id, away_name), None: (None, None)}
     other = {"home": "away", "away": "home", None: None}
 
+    namesakes = {}   # (abbrev, team) → _split_namesakes(), used up goal by goal
+
+    def resolve_point(abbrev, team, kind):
+        """resolve_player for a scorer ("goals") or an assist ("assists")."""
+        if abbrev and lineup_map and lineup_map.get((abbrev, team)) == (None, None):
+            if (abbrev, team) not in namesakes:
+                namesakes[(abbrev, team)] = _split_namesakes(lineup_map, abbrev, team, game_id, season)
+            if namesakes[(abbrev, team)][kind]:
+                return namesakes[(abbrev, team)][kind].pop(0)
+        return resolve_player(lineup_map, abbrev, team)
+
     stored_goals = stored_pen = 0
     for i, row in enumerate(rows):
         cells = row.get("cells", [])
@@ -720,8 +721,8 @@ def fetch_and_store_goals(conn, game_id, home_id, away_id,
                             f"score step not clear, team left empty")
 
             # Resolve to player IDs via lineup map (keyed by the full team name)
-            scorer_name, scorer_pid = resolve_player(lineup_map, scorer, scored_name or scored_raw)
-            assist_name, assist_pid = resolve_player(lineup_map, assist, scored_name or scored_raw)
+            scorer_name, scorer_pid = resolve_point(scorer, scored_name or scored_raw, "goals")
+            assist_name, assist_pid = resolve_point(assist, scored_name or scored_raw, "assists")
 
             secs = minute_to_seconds(minute_raw)
             conn.execute("""
@@ -1278,6 +1279,48 @@ def resolve_player(lineup_map, abbrev_name, team_raw):
         if name == abbrev_name and full:
             return full, pid
     return None, None
+
+
+def _game_points(pid, game_id, season):
+    """(goals, assists) of one player in one game, from his season overview
+    (GET players/:player_id/overview?season=). (0, 0) if the game isn't there."""
+    raw  = api_get(f"players/{pid}/overview", {"season": season})
+    data = unwrap(raw) if raw else {}
+    keys = [h.get("key") for h in data.get("headers", [])]
+    if "goals" not in keys or "assists" not in keys:
+        return 0, 0
+    for region in data.get("regions", []):
+        for row in region.get("rows", []):
+            if str(row.get("id")) != str(game_id):
+                continue
+            cells = row.get("cells", [])
+            def count(key):
+                i = keys.index(key)
+                text = cell_text(cells[i]) if i < len(cells) else ""
+                return int(text) if text.isdigit() else 0   # "Nicht gespielt"
+            return count("goals"), count("assists")
+    return 0, 0
+
+
+def _split_namesakes(lineup_map, abbrev_name, team_name, game_id, season):
+    """Two players of one team behind the same abbreviation → who gets the goals.
+
+    The legacy API shortens every first name to one letter, so Rahul and Rohit
+    Chiplunkar are both "R. Chiplunkar" (api-v2 wrote "Ra." / "Ro."), the feed
+    has no player ids, and the lineup map marks the name as a collision.
+    Returns {"goals": [(full_name, pid), …], "assists": […]} with each namesake
+    once per goal / assist his overview lists for this game. Which of two
+    namesakes' goals is which stays open when both scored — the counts per
+    player are right."""
+    out = {"goals": [], "assists": []}
+    for (name, team), (full, pid) in list(lineup_map.items()):
+        if team != team_name or name != full or not pid or abbrev_name not in _make_abbrevs(full):
+            continue
+        time.sleep(SLEEP)
+        goals, assists = _game_points(pid, game_id, season)
+        out["goals"]   += [(full, pid)] * goals
+        out["assists"] += [(full, pid)] * assists
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════
